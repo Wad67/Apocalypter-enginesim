@@ -1,0 +1,31 @@
+Vendored from engine-sim by Ange Yaghi (MIT, see LICENSE):
+  https://github.com/ange-yaghi/engine-sim                      @ 85f7c3b959a908ed5232ede4f1a4ac7eafe6b630
+  https://github.com/ange-yaghi/simple-2d-constraint-solver     @ e009f4ff1c9c4c5874e865e893cdb62e208fb2b3
+                                                                  (dependencies/submodules/)
+
+Only the simulation and synthesizer are included: the application, UI, scripting language
+(piranha) and the other submodules are not. Engines are built in code (../bridge/engine_builder.cpp).
+
+Local changes
+
+Portability (GCC / MinGW):
+  - synthesizer.cpp: removed the unused delta-studio include; fpclassify -> std::fpclassify.
+  - engine.cpp, connecting_rod.cpp: backslash include paths -> forward slashes.
+  - gas_system.h: GasSystem::Mix default member initialisers -> constructor (GCC can't use them
+    in default arguments inside the enclosing class, CWG 1397).
+  - units.h, constants.h: 'extern constexpr' -> 'inline constexpr' (one definition per program).
+  - simple-2d-constraint-solver sparse_matrix.h: includes matrix.h instead of forward-declaring
+    Matrix, whose members its templates use.
+
+Behaviour:
+  - leveling_filter.cpp: slow release (peak 0.99995 / sample, gain up 0.0005 / sample, down at
+    once) instead of a ~23 ms per-pulse compressor that pumped and clipped at low rpm.
+  - exhaust_system.h, piston_engine_simulator.cpp: ExhaustSystem::getSoundLength / setSoundLength.
+    The synthesizer's pulse delay and 1/L^2 level use a sound length separate from the collector's
+    physical length (a short physical collector is a tiny gas volume that oscillates at 1-2 kHz).
+  - intake.h, intake.cpp: Intake::m_inletPressure (default 1 atm) replaces the hard-coded 1 atm the
+    intake draws from, for forced induction.
+
+Setters for runtime engine wear:
+  - IgnitionModule::setPlugEnabled, Piston::setBlowbyK,
+    Fuel::setBurningEfficiencyRandomness, Fuel::setMaxBurningEfficiency.
