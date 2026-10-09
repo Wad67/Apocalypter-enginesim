@@ -25,7 +25,13 @@ Behaviour:
     physical length (a short physical collector is a tiny gas volume that oscillates at 1-2 kHz).
   - intake.h, intake.cpp: Intake::m_inletPressure (default 1 atm) replaces the hard-coded 1 atm the
     intake draws from, for forced induction.
+  - exhaust_system.h, exhaust_system.cpp: ExhaustSystem::m_outletPressure (default 1 atm) replaces the
+    hard-coded 1 atm the exhaust flows out against, for a turbine's back pressure.
 
 Setters for runtime engine wear:
   - IgnitionModule::setPlugEnabled, Piston::setBlowbyK,
     Fuel::setBurningEfficiencyRandomness, Fuel::setMaxBurningEfficiency.
+- Dynamometer: m_fixedNegative, so a dyno holding the crank at (or near) rest drives it in the
+  engine's direction instead of whichever way it happens to turn (dynamometer.h / .cpp).
+- PistonEngineSimulator::writeToSynthesizer: removed the unused static lastValveLift[8], which engines
+  with more than 8 cylinders (the game's V12) wrote past the end of.

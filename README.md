@@ -19,18 +19,64 @@ sound as it happens. The simulated engine is built from the engine fitted to the
 - **Engine condition.** A worn engine leaks past its rings, burns unevenly, stumbles on misfires (from 70 %
   condition down, worst at idle) and hunts at idle. Engines with four or more cylinders lose whole cylinders:
   one under 50 %, two under 30 %, and on six or more cylinders a third under 10 %.
-- **Forced induction.** The boost of the game's (NWH) forced induction raises the simulated intake pressure.
+- **Forced induction.** The boost of the game's (NWH) forced induction raises the simulated intake pressure. With
+  the experimental simulated drivetrain, turbos and superchargers are simulated machines instead (below).
 - **Exhausts.** The fitted exhaust changes the sound. Every exhaust is set relative to a base sound with no
   exhaust, and both can be tuned without rebuilding.
 - **Turbo and supercharger sound.** The game's own spool and whine clips, re-proportioned (optional), one sound
   per turbo: each part's turbos are listed by size (Triple Threat: two small and one large). A turbo spools with
   rpm and load, lags low in the revs and coasts down after a lift; small ones spool sooner and whistle higher. A
-  supercharger's whine follows the engine speed. Stock, both top out at half the rev range. The wastegate
-  flutter is left as it is.
+  supercharger's whine follows the engine speed. Stock, both top out at half the rev range. With the simulated
+  drivetrain each turbo whistles with its simulated shaft speed and the blow-off flutters when the simulated valve
+  lifts.
 - **Only the engine sound is replaced.** Wind, reverse whine and beep, gear changes, muffler crackle, turbo
   whistle and the rest of the game's vehicle sounds are untouched.
 - All settings can be changed in game through the Apocasetter Mods menu
   ([Apocasetter index](https://github.com/DeonUrist/Apocasetter-Index)).
+
+### Effects
+
+Added without changing the simulation (it is only read), each with its own setting under `[Effects]`:
+
+- **Backfires**: unburnt fuel reaching a hot exhaust runner bangs at the exhaust, with flame and dark smoke from its
+  emitters and a flash: on the rev limiter, on lifting off, and often from a worn engine's misfires (outside the
+  engine's own sound).
+- **Valve tick**: a tick as each valve closes, from the engine's cam timing; louder with rpm and wear.
+- **Engine rock**: the engine rocks on its mounts with its torque, in place of the game's constant shake.
+- **Exhaust smoke**: the fitted exhaust's own emitters follow the engine's exhaust: puffs and flow, black with
+  unburnt fuel and heavy boost (rolling coal), blue-grey with blow-by as it wears, smoke while cranking.
+- **Chassis torque**: the engine's torque reaction rolls the vehicle body.
+
+A low-pass filter (`[Audio] LowRpmFilter`, on by default, with its cutoffs) takes out the gas model's squeal at
+very low engine speeds.
+
+### ⚠ Experimental: simulated drivetrain
+
+Off by default (`[Experimental] ⚠ Simulated drivetrain ⚠`). The simulated engine powers the vehicle instead of the
+game's engine model: the game's engine keeps driving the clutch, gearbox and wheels, but on the simulated engine's
+torque and at its flywheel's inertia, while the simulation holds its crank at the game's engine speed. Only the
+simulated engines (`MaxEngines`, nearest first) are driven this way.
+
+- **No running state.** The simulation's inputs are the key, the starter, the throttle and the fuel. It fires
+  whenever its crank turns with the key on and fuel there, however it is turned, so it catches, stalls, starves
+  and push / bump starts on its own. The game's own start, stop, stall, auto-start and damage-stop logic is
+  switched off for these engines.
+- **Ignition switch.** Click to turn the ignition on or off, hold to crank for as long as it is held.
+- **Starting.** Fuel has to wet the ports before anything lights, and on a slow crank cold or worn engines fail
+  to light some charges: a healthy engine catches in about a second and a half, a worn one takes several seconds,
+  a finished one may not catch. Warmth is the game's oil temperature. The starter cranks at a realistic speed,
+  dims the lights, and held against more than it can turn (in gear, clutch out) it gives up and only clicks.
+- **Fuel.** An empty tank starves the engine after the fuel left in the lines is used up.
+- **Forced induction as machines.** A supercharger is a blower on the crank: it moves a fixed volume per
+  revolution and takes power to drive, so a big blower on a small engine makes boost and costs more than it gives.
+  A turbo is a shaft spun by the simulated exhaust against its compressor, with a wastegate, a blow-off valve and
+  back pressure; a big turbo on a small engine barely spools. Boost is what the machines deliver against what the
+  engine draws, capped at each part's set pressure.
+- **Twincharging.** A turbo and a supercharger can be fitted together: with one fitted, hold the other against
+  the engine's mount and press Use. The turbo feeds the blower; each is removed as normal.
+- **Boost gauge.** The game's boost gauge reads the simulated pressure.
+- With `Match game power` (on), each engine's torque is scaled to the game's rated power (`drive_torque_scale`
+  in `EngineSim.engines.cfg`).
 
 ## Requirements
 
@@ -77,6 +123,13 @@ BepInEx\plugins\EngineSim\
 | Induction | `TurboFullSpoolRpm` | `0.65` | Fraction of the rev limit at which a size 1 turbo spools fully at full throttle. |
 | Induction | `TurboSpinDown` | `0.8` | Seconds for a size 1 turbo to coast down after a lift. Spool-up time is the game's. |
 | Induction | `SuperchargerPitch` | `0.5` | Whine pitch of a size 1 blower at the rev limit, proportional to rpm below it. |
+| Audio | `LowRpmFilter` | `true` | Low-pass at low rpm, with `LowRpmFilterCrank`, `LowRpmFilterIdle`, `LowRpmFilterOpenAt`. |
+| Effects | `Backfires`, `BackfireSound`, `BackfireChance` | `1`, `gunshot_6`, `0.01` | |
+| Effects | `ValveTick`, `EngineRock`, `ExhaustSmoke`, `ChassisTorque` | `1` | 0 = off / the game's own. |
+| Experimental | `⚠ Simulated drivetrain ⚠` | `false` | The simulated engine powers the vehicle. |
+| Experimental | `Match game power` | `true` | Scale its torque to the game's rated power. |
+| Experimental | `Hard starting` | `1` | 0 = every charge lights from the first turn. |
+| Experimental | `Starter gives up` | `true` | An overloaded starter only clicks. |
 | Debug | `VerboseLog` | `false` | Engine and exhaust identification, live statistics and part details in `LogOutput.log`. |
 
 The exhaust ranges are the limits of engine-sim's exhaust model: outside them it oscillates (a metallic squeal
@@ -127,14 +180,15 @@ default              = -, 0.95, 0.25, 1.0, 0.85
 
 `none` is no exhaust fitted, `default` an exhaust part that isn't listed. `-` keeps the base impulse response.
 
-`BepInEx\config\EngineSim.induction.cfg` lists each turbo and supercharger part's units by relative size (1 = a
-medium single unit; more boost, a bigger unit):
+`BepInEx\config\EngineSim.induction.cfg` lists each turbo and supercharger part's set pressure (psi; the wastegate
+or relief valve with the simulated drivetrain) and its units by relative size (1 = a medium unit: a 50 mm turbo
+compressor, or a blower moving 2 L per crank revolution):
 
 ```
-# part id = size [, size ...]
-865075917467842793   = 0.6, 0.6, 1.4     # Turbo - Triple Threat - Power x1.7 (two small, one large)
-8589483064466669470  = 0.85, 0.85        # Turbo - Double Trouble - Power x1.5 (twin)
-1280457821324750492  = 0.8               # Supercharger - Med Mark - Power x1.2
+# part id = set pressure : size [, size ...]
+865075917467842793   = 6.2  : 0.6, 0.6, 1.4   # Turbo - Triple Threat - Power x1.7 (two small, one large)
+8589483064466669470  = 4.45 : 0.85, 0.85      # Turbo - Double Trouble - Power x1.5 (twin)
+1280457821324750492  = 1.8  : 0.8             # Supercharger - Med Mark - Power x1.2
 ```
 
 ## How it works
@@ -184,6 +238,11 @@ native/build/linux/render_wav "5.2L V8 230HP 340Nm Gasoline" out.wav native/ir \
 
 Environment variables set the rest: `ES_CONDITION` (0-1), `ES_IDLE`, `ES_REDLINE`, `ES_IDLE_AIR`,
 `ES_LIMITER` (cut length in s, default 0.08, 0 = off), `ES_BOOST` (pressure ratio), `ES_FLUID_STEPS`.
+
+`native/build/linux/cosim` tests the simulated drivetrain against a stand-in for the game's engine:
+`drive` (crank, idle, throttle, stall, roll start), `sweep` (torque and power by rpm), `start` (cold starts:
+`ES_TRIALS`, `ES_HEAT`, `ES_ROLL`, `ES_LOAD`) and `machines` (boost by rpm, spool and blow-off: `ES_SC`,
+`ES_SC_PSI`, `ES_TURBOS`, `ES_WG_PSI`, `ES_LIFT`).
 
 ## Credits and license
 

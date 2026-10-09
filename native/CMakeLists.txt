@@ -37,7 +37,7 @@ target_include_directories(engine-sim-core PUBLIC ${ES}/include ${ES}/dependenci
 target_link_libraries(engine-sim-core PUBLIC scs)
 
 # the plugin's native library: C API + engine builder
-add_library(enginesim SHARED bridge/enginesim_api.cpp bridge/engine_builder.cpp)
+add_library(enginesim SHARED bridge/enginesim_api.cpp bridge/engine_builder.cpp bridge/effects.cpp bridge/induction.cpp)
 target_link_libraries(enginesim PRIVATE engine-sim-core)
 # not "enginesim.dll": Windows file names are case-insensitive and EngineSim.dll is the plugin
 set_target_properties(enginesim PROPERTIES PREFIX "" OUTPUT_NAME enginesim_native CXX_VISIBILITY_PRESET hidden)
@@ -51,4 +51,18 @@ target_include_directories(render_wav PRIVATE bridge)
 target_link_libraries(render_wav PRIVATE enginesim)
 if (WIN32)
     target_link_options(render_wav PRIVATE -static -static-libgcc -static-libstdc++)
+endif ()
+
+add_executable(cosim tools/cosim.cpp)
+target_include_directories(cosim PRIVATE bridge)
+target_link_libraries(cosim PRIVATE enginesim)
+if (WIN32)
+    target_link_options(cosim PRIVATE -static -static-libgcc -static-libstdc++)
+endif ()
+
+add_executable(probe tools/probe.cpp)
+target_include_directories(probe PRIVATE bridge)
+target_link_libraries(probe PRIVATE enginesim)
+if (WIN32)
+    target_link_options(probe PRIVATE -static -static-libgcc -static-libstdc++)
 endif ()

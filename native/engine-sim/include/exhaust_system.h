@@ -47,6 +47,9 @@ class ExhaustSystem : public Part {
 
         inline GasSystem *getSystem() { return &m_system; }
 
+        // what the exhaust flows out against (default 1 atm): a turbine's back pressure
+        double m_outletPressure = units::pressure(1.0, units::atm);
+
     protected:
         GasSystem m_atmosphere;
         GasSystem m_system;

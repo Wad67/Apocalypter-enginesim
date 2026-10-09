@@ -23,6 +23,7 @@ namespace EngineSim
         public readonly string PartName;     // the engine's label in EngineSim.engines.cfg, for the log
         public readonly long EngineId, ExhaustId;
         public readonly GameObject EnginePart;
+        public readonly GameObject ExhaustPart;   // the fitted exhaust part, null if none
         public HutongGames.PlayMaker.FsmFloat ConditionVar;   // main thread only; see EngineManager.ReadCondition
         private readonly float _loudness;
         public readonly Native.EngineDesc Desc;
@@ -30,7 +31,33 @@ namespace EngineSim
         // controls (main thread -> sim thread)
         private float _targetRpm, _throttle, _latency, _condition = 1f;
         private float _revLimit, _limiterCut = 0.08f, _boost = 1f;
+
+        // forced induction as machines (drive mode): what is fitted, and what it does
+        private Native.InductionDesc _induction;
+        private int _inductionVersion, _inductionApplied;
+        private readonly object _inductionLock = new object();
+        private float _boostPsi, _superchargerKw, _blowOffPsi;
+        private int _blowOffs;
+        private readonly float[] _turboSpeed = new float[Native.MaxTurbos];
+        public bool Machines { get; private set; }
+        public float NextInductionScan;
+        public string InductionKey = "";
         private int _ignition;
+
+        // drive mode ([Experimental] simulated drivetrain): the engine powers the game's drivetrain
+        public readonly bool Drive;
+        private readonly float _driveTorqueScale;
+        // the clutch the engine needs, N m (drive mode; 0 = leave the game's)
+        public readonly float ClutchTorque;
+        private int _starter, _fuel = 1;
+        private float _idleRpm;
+        private float _torque, _crankInertia, _starterLoad, _rawTorque;
+        private float _heat;
+        private int _starterJammed;
+        private readonly double[] _turboRead = new double[Native.MaxTurbos];
+        private int _backfires;
+        private float _exhaustFlow, _exhaustFuel;
+        private volatile bool _driveReady;
 
         // status (sim thread -> main thread)
         private volatile bool _run = true;
@@ -54,15 +81,64 @@ namespace EngineSim
         public long UnderrunSamples { get { return _output != null ? _output.UnderrunFrames : 0; } }
         public int RingFill { get { return _ring.Count; } }
 
-        public EngineSession(RealisticEngineSound res, VehicleController vc, string partName, FittedParts parts, float loudness,
-            Native.EngineDesc desc, string irDir, AudioMixerGroup mixer)
+        public bool DriveReady { get { return _driveReady; } }
+        // engine torque at the crank for the game's drivetrain, N m (drive mode)
+        public float DriveTorque { get { return Volatile.Read(ref _torque) * _driveTorqueScale; } }
+        public float CrankInertia { get { return Volatile.Read(ref _crankInertia); } }
+        // engine torque over the sim's last update, N m, unsmoothed (the engine rocking on its mounts)
+        public float RawTorque { get { return Volatile.Read(ref _rawTorque); } }
+        public float PeakTorque { get { return _peakTorque; } }
+        private readonly float _peakTorque;
+        public int TakeBackfires() { return Interlocked.Exchange(ref _backfires, 0); }
+        // exhaust over the sim's last update: flow out of the cylinders (mol/s) and its unburnt fuel fraction
+        public float ExhaustFlow { get { return Volatile.Read(ref _exhaustFlow); } }
+        public float ExhaustFuel { get { return Volatile.Read(ref _exhaustFuel); } }
+        public float Condition { get { return Volatile.Read(ref _condition); } }
+        // intake pressure ratio: the machines' (drive mode, when fitted) or the game's
+        public float Boost { get { return Machines ? 1f + Volatile.Read(ref _boostPsi) / 14.696f : Volatile.Read(ref _boost); } }
+        public float BoostPsi { get { return Machines ? Volatile.Read(ref _boostPsi) : (Volatile.Read(ref _boost) - 1f) * 14.696f; } }
+        public float SuperchargerKw { get { return Volatile.Read(ref _superchargerKw); } }
+        // the turbos' blow-off valve lifting since the last call, and the boost (psi) it let go of
+        public int TakeBlowOffs(out float psi) { psi = Volatile.Read(ref _blowOffPsi); return Interlocked.Exchange(ref _blowOffs, 0); }
+        public float TurboSpeed(int i) { return i >= 0 && i < Native.MaxTurbos ? Volatile.Read(ref _turboSpeed[i]) : 0f; }
+
+        public void SetInduction(Native.InductionDesc desc)
         {
+            lock (_inductionLock) { _induction = desc; ++_inductionVersion; }
+            Machines = desc.superchargerSize > 0f || desc.turbos > 0;
+        }
+
+        // the most exhaust the engine moves without boost (mol/s): its displacement at its rev limit
+        public float MaxExhaustFlow
+        {
+            get
+            {
+                var p = Desc.engine;
+                double litres = System.Math.PI / 4 * p.boreMm * p.boreMm * p.strokeMm * p.cylinders * 1e-6;
+                return (float)System.Math.Max(0.5, litres * System.Math.Max(1000f, Desc.redlineRpm) / 120.0 * 0.0416);
+            }
+        }
+        // how hard the starter works, 0..1 (drive mode)
+        public float StarterLoad { get { return Volatile.Read(ref _starterLoad); } }
+        // the starter gave up (held against more than it can turn): its solenoid only clicks
+        public bool StarterJammed { get { return Volatile.Read(ref _starterJammed) != 0; } }
+        // engine temperature for starting, 0 cold .. 1 warm (drive mode; the game's oil temperature)
+        public void SetHeat(float heat) { Volatile.Write(ref _heat, Mathf.Clamp01(heat)); }
+
+        public EngineSession(RealisticEngineSound res, VehicleController vc, string partName, FittedParts parts, float loudness,
+            Native.EngineDesc desc, string irDir, AudioMixerGroup mixer, bool drive, float driveTorqueScale, float peakTorque)
+        {
+            Drive = drive;
+            _driveTorqueScale = driveTorqueScale;
+            ClutchTorque = 2.5f * peakTorque * driveTorqueScale;
+            _peakTorque = peakTorque;
             Res = res;
             Vc = vc;
             PartName = partName;
             EngineId = parts.EngineId;
             ExhaustId = parts.ExhaustId;
             EnginePart = parts.Engine;
+            ExhaustPart = parts.Exhaust;
             _loudness = loudness;
             Desc = desc;
             _irDir = irDir;
@@ -112,6 +188,21 @@ namespace EngineSim
             if (_source != null && _source.isActiveAndEnabled && !_source.isPlaying) _source.Play();
         }
 
+        // drive mode: the starter, the fuel supply and the idle speed (the key is SetControls' ignition)
+        public void SetDrive(bool starter, bool fuel, float idleRpm)
+        {
+            Volatile.Write(ref _starter, starter ? 1 : 0);
+            Volatile.Write(ref _fuel, fuel ? 1 : 0);
+            Volatile.Write(ref _idleRpm, idleRpm);
+        }
+
+        // the game's distance attenuation for a sound at this point (the engine's own rolloff)
+        public float DistanceGain(Vector3 at)
+        {
+            var ear = Listener.Current;
+            return ear == null ? 1f : _rolloff.Gain(Vector3.Distance(ear.transform.position, at));
+        }
+
         public void UpdateDistance(Transform listener)
         {
             if (_output == null || _audioObject == null) return;
@@ -146,6 +237,11 @@ namespace EngineSim
 
                 // engine-sim applies its volume before the int16 clamp: keep it at 1, gain is applied in AudioOutput
                 Native.es_set_volume(session, 1.0);
+                if (Drive)
+                {
+                    Native.es_set_drive_mode(session, 1);
+                    Volatile.Write(ref _crankInertia, (float)Native.es_get_crank_inertia(session));
+                }
                 var chunk = new short[4096];
                 var clock = Stopwatch.StartNew();
                 double last = clock.Elapsed.TotalSeconds;
@@ -161,11 +257,46 @@ namespace EngineSim
                     Native.es_set_wear_intensity(session, Plugin.WearIntensityEntry.Value);
                     Native.es_set_rev_limiter(session, Volatile.Read(ref _revLimit), Volatile.Read(ref _limiterCut));
                     Native.es_set_boost(session, Volatile.Read(ref _boost));
+                    lock (_inductionLock)
+                    {
+                        if (_inductionApplied != _inductionVersion)
+                        {
+                            if (_induction.turboSize == null) _induction.turboSize = new float[Native.MaxTurbos];
+                            Native.es_set_induction(session, ref _induction);
+                            _inductionApplied = _inductionVersion;
+                        }
+                    }
                     Native.es_set_idle_air(session, Plugin.IdleAirEntry.Value);
+                    Native.es_set_lowpass(session, Plugin.FilterEntry.Value ? Plugin.FilterCrankEntry.Value : 0f, Plugin.FilterIdleEntry.Value,
+                        Plugin.FilterOpenAtEntry.Value, Drive ? Volatile.Read(ref _idleRpm) : Desc.idleRpm);
+                    Native.es_set_effects(session, Plugin.BackfireEntry.Value, Plugin.BackfireChanceEntry.Value, Plugin.ValveTickEntry.Value);
+                    if (Drive)
+                    {
+                        Native.es_set_starter(session, Volatile.Read(ref _starter));
+                        Native.es_set_fuel(session, Volatile.Read(ref _fuel));
+                        Native.es_set_idle_rpm(session, Volatile.Read(ref _idleRpm));
+                        Native.es_set_starting(session, Plugin.HardStartingEntry.Value, Plugin.StarterGivesUpEntry.Value ? 1 : 0);
+                        Native.es_set_heat(session, Volatile.Read(ref _heat));
+                    }
 
                     double now = clock.Elapsed.TotalSeconds;
                     Native.es_update(session, now - last);
                     last = now;
+                    if (Drive)
+                    {
+                        Volatile.Write(ref _torque, (float)Native.es_get_torque(session));
+                        Volatile.Write(ref _starterLoad, (float)Native.es_get_starter_load(session));
+                        Volatile.Write(ref _starterJammed, Native.es_get_starter_jammed(session));
+                        double psi, kw;
+                        Native.es_get_induction(session, out psi, _turboRead, out kw);
+                        Volatile.Write(ref _boostPsi, (float)psi);
+                        Volatile.Write(ref _superchargerKw, (float)kw);
+                        double letGo;
+                        int blowOffs = Native.es_get_blowoffs(session, out letGo);
+                        if (blowOffs > 0) { Volatile.Write(ref _blowOffPsi, (float)letGo); Interlocked.Add(ref _blowOffs, blowOffs); }
+                        for (int i = 0; i < Native.MaxTurbos; ++i) Volatile.Write(ref _turboSpeed[i], (float)_turboRead[i]);
+                        _driveReady = true;
+                    }
 
                     // Keep the ring at the target fill, no more: the synth then backs up,
                     // the sim sees its input latency rise and slows down (Simulator::startFrame).
@@ -182,6 +313,12 @@ namespace EngineSim
                     }
 
                     Volatile.Write(ref _rpm, (float)Native.es_get_rpm(session));
+                    Volatile.Write(ref _rawTorque, (float)Native.es_get_torque_raw(session));
+                    Interlocked.Add(ref _backfires, Native.es_get_backfires(session));
+                    double flow, fuel, temperature;
+                    Native.es_get_exhaust(session, out flow, out fuel, out temperature);
+                    Volatile.Write(ref _exhaustFlow, (float)flow);
+                    Volatile.Write(ref _exhaustFuel, (float)fuel);
                     Volatile.Write(ref _processingUs, (float)Native.es_get_processing_time_us(session));
                     Thread.Sleep(2);
                 }
@@ -193,6 +330,7 @@ namespace EngineSim
             finally
             {
                 _ready = false;
+                _driveReady = false;
                 if (session != IntPtr.Zero) Native.es_destroy(session);
             }
         }

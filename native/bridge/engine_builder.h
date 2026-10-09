@@ -21,6 +21,7 @@ struct BuiltEngine {
     Engine *engine = nullptr;
     Vehicle *vehicle = nullptr;
     Transmission *transmission = nullptr;
+    double crankInertia = 0;   // kg m2, crank + flywheel as built
 
     std::vector<Function *> functions;
     std::vector<Camshaft *> camshafts;

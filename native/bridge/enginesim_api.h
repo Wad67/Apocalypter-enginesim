@@ -157,6 +157,69 @@ ES_API double es_get_processing_time_us(es_session *s);
 
 ES_API const char *es_last_error(void);
 
+/* Drive mode: instead of following the game's engine, the engine powers it. The crank is held at
+   the speed set by es_set_target_rpm (the game's engine speed) and es_get_torque() reports the
+   torque the engine makes there, for the game's drivetrain to run on. The key (es_set_ignition), the
+   starter (es_set_starter) and the fuel supply (es_set_fuel) are its inputs; an idle governor holds
+   es_set_idle_rpm. There is no running state: it runs, stalls, catches or starves as simulated.
+   Wear and the rev limiter act on torque. */
+ES_API void es_set_drive_mode(es_session *s, int32_t on);
+ES_API void es_set_starter(es_session *s, int32_t on);
+ES_API void es_set_idle_rpm(es_session *s, double rpm);
+/* Engine torque at the crank, N m, smoothed over about half an engine cycle (+ = driving). */
+ES_API double es_get_torque(es_session *s);
+/* Fuel reaching the engine (0 = the tank is empty: it starves). */
+ES_API void es_set_fuel(es_session *s, int32_t available);
+/* Low-rpm filter on the engine sound (not on the effects): a low-pass whose cutoff rises from
+   crankHz below a fifth of idle to idleHz at idle, wide open at openAt x idle. crankHz <= 0 = off. */
+ES_API void es_set_lowpass(es_session *s, double crankHz, double idleHz, double openAt, double idleRpm);
+/* Effects: backfire detection (gain 0 = off; chance an unburnt slug in a hot runner backfires; the
+   game plays them, see es_get_backfires) and valve tick (gain, 0 = off). */
+ES_API void es_set_effects(es_session *s, double backfireGain, double backfireChance, double valveGain);
+/* Exhaust since the last call, for the game's smoke: flow out of the cylinders (mol/s), its fuel
+   fraction (unburnt fuel), and the exhaust runners' mean temperature (K). */
+ES_API void es_get_exhaust(es_session *s, double *flow, double *fuel, double *temperature);
+/* Backfires since the last call (for the game's exhaust flash). */
+ES_API int32_t es_get_backfires(es_session *s);
+/* Engine torque at the crank over the last update, N m, without the cycle smoothing (for the
+   engine rocking on its mounts). */
+ES_API double es_get_torque_raw(es_session *s);
+/* Diagnostics: a cylinder's exhaust runner: fuel fraction of its gas, temperature (K), moles. */
+ES_API void es_probe_exhaust(es_session *s, int32_t cylinder, double *fuel, double *temperature, double *moles);
+/* How hard the starter is working (a DC motor): its current / its stall current, 1 at rest falling to
+   0 at its free speed (0 when off). */
+ES_API double es_get_starter_load(es_session *s);
+/* The starter gave up: held against more than it can turn, its solenoid only clicks (until it is
+   released). */
+ES_API int32_t es_get_starter_jammed(es_session *s);
+/* Starting: hardStart 0..1 (0 = engine-sim's every charge lights from the first turn; 1 = priming,
+   and charges failing to light on a cold or worn engine's slow crank), and whether the starter gives
+   up when it can't turn the engine. */
+ES_API void es_set_starting(es_session *s, double hardStart, int32_t starterGivesUp);
+
+/* Forced induction as machines (drive mode): a supercharger on the crank and turbos in the exhaust,
+   their boost from what they deliver against what the engine draws (see induction.h). Sizes are
+   relative, 1 = a medium unit; 0 superchargerSize / 0 turbos = none. With both, the turbos feed the
+   supercharger. Replaces es_set_boost while any is fitted. */
+#define ES_MAX_TURBOS 4
+typedef struct es_induction_desc {
+    float superchargerSize;
+    float superchargerReliefPsi;        /* its relief valve, psi over ambient */
+    int32_t turbos;
+    float turboSize[ES_MAX_TURBOS];
+    float wastegatePsi;                 /* psi over ambient */
+} es_induction_desc;
+ES_API void es_set_induction(es_session *s, const es_induction_desc *desc);
+/* Boost after the last compressor, psi over ambient (negative: under); each turbo's shaft speed as a
+   fraction of its top speed (ES_MAX_TURBOS values); the power driving the supercharger, kW. */
+ES_API void es_get_induction(es_session *s, double *boostPsi, double *turboSpeed, double *superchargerKw);
+/* Blow-off valve openings since the last call, and the boost it let go of the last time, psi. */
+ES_API int32_t es_get_blowoffs(es_session *s, double *psi);
+/* Engine temperature for starting, 0 cold .. 1 warm (the game's engine temperature). */
+ES_API void es_set_heat(es_session *s, double heat);
+/* The simulated crank and flywheel's moment of inertia, kg m2. */
+ES_API double es_get_crank_inertia(es_session *s);
+
 /* sizeof(es_engine_desc), so the plugin can check its copy of the struct matches. */
 ES_API int32_t es_desc_size(void);
 

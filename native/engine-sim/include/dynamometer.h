@@ -21,6 +21,7 @@ class Dynamometer : public atg_scs::Constraint {
 
         bool m_hold;
         bool m_enabled;
+        bool m_fixedNegative = false;   // Engine Sim: always drive in the engine's (negative) direction
 };
 
 #endif /* ATG_ENGINE_SIM_DYNAMOMETER_H */

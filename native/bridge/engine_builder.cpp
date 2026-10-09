@@ -221,7 +221,7 @@ bool defaultParams(int cylinders, int layout, float bankAngleDeg, float displace
     p.flywheelRadiusMm = (float)(6 * Inch);
     p.frictionTorqueNm = (float)((L / 2.5 + 0.5) * FtLb);
     p.starterTorqueNm = (float)((70 + 20 * L) * FtLb);
-    p.starterSpeedRpm = 500;
+    p.starterSpeedRpm = 300;   // free speed at the crank: cranks a cold engine at ~250-350 rpm
     p.blowbyCfm = 0.001f;
 
     // intake
@@ -429,6 +429,7 @@ bool buildEngine(const es_engine_desc &d, const std::string &irDirectory, BuiltE
     cp.rodJournals = n;
     Crankshaft *crank = engine->getCrankshaft(0);
     crank->initialize(cp);
+    out->crankInertia = cp.momentOfInertia;
 
     // global cylinder order is bank-major; remember which cylinder each slot is
     const std::vector<int> order = bankMajorOrder(n, bankCount, p.cylinderBank);

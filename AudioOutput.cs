@@ -14,6 +14,7 @@ namespace EngineSim
     // An engine is heard by distance only, never panned by listener angle:
     // the gain comes from EngineSession (RES's own rolloff) and goes to the
     // front left / right channels equally.
+    // (The low-rpm filter is applied in the native library, before backfires and valve tick.)
     internal sealed class AudioOutput : MonoBehaviour
     {
         private AudioRing _ring;

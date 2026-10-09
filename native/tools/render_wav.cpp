@@ -5,6 +5,7 @@
 // Environment: ES_CONDITION, ES_IDLE, ES_REDLINE, ES_IDLE_AIR, ES_LIMITER (cut s, 0 = off), ES_BOOST,
 // ES_FLUID_STEPS, ES_NOISE, ES_JITTER, ES_IDLE_THROTTLE, ES_NO_IGNITION, ES_RPMSTATS.
 #include "enginesim_api.h"
+#include "test_engines.h"
 
 #include <algorithm>
 #include <cctype>
@@ -27,40 +28,6 @@ static void writeWav(const char *path, const std::vector<int16_t> &pcm) {
     fwrite(&rate, 4, 1, f); fwrite(&byteRate, 4, 1, f); fwrite(&align, 2, 1, f); fwrite(&bits, 2, 1, f);
     fwrite("data", 1, 4, f); fwrite(&dataBytes, 4, 1, f); fwrite(pcm.data(), 2, pcm.size(), f);
     fclose(f);
-}
-
-// Test convenience only (the plugin identifies engines by part id): reads the game's part names,
-// "2.8L V6 115HP 183Nm Gasoline", "594cc I2 23HP 39Nm Gasoline", into the five basic values.
-static bool engineFromName(const char *name, es_engine_desc *out) {
-    int cylinders = 0, layout = ES_LAYOUT_INLINE, diesel = 0;
-    float litres = 0;
-    std::string s(name);
-    size_t i = 0;
-    while (i < s.size()) {
-        while (i < s.size() && isspace((unsigned char)s[i])) ++i;
-        size_t j = i;
-        while (j < s.size() && !isspace((unsigned char)s[j])) ++j;
-        std::string tok;
-        for (char c : s.substr(i, j - i)) tok += (char)tolower((unsigned char)c);
-        i = j;
-        if (tok.empty()) continue;
-        char *end = nullptr;
-        const double num = strtod(tok.c_str(), &end);
-        const std::string suffix = (end != nullptr) ? std::string(end) : "";
-        if (end != tok.c_str() && suffix == "l") litres = (float)num;
-        else if (end != tok.c_str() && suffix == "cc") litres = (float)(num / 1000.0);
-        else if (tok.rfind("diesel", 0) == 0) diesel = 1;
-        else if (tok.size() >= 2 && strchr("ivbh", tok[0]) != nullptr && isdigit((unsigned char)tok[1])) {
-            cylinders = atoi(tok.c_str() + 1);
-            layout = (tok[0] == 'i') ? ES_LAYOUT_INLINE : (tok[0] == 'v') ? ES_LAYOUT_V : ES_LAYOUT_BOXER;
-        }
-    }
-    const float bank = (layout != ES_LAYOUT_V) ? 0.0f : (cylinders == 2 ? 45.0f : (cylinders == 6 || cylinders == 12) ? 60.0f : 90.0f);
-    memset(out, 0, sizeof(*out));
-    if (!es_default_params(cylinders, layout, bank, litres, diesel, &out->engine)) return false;
-    out->redlineRpm = diesel ? 4000.0f : 6000.0f;
-    out->idleRpm = diesel ? 750.0f : 850.0f;
-    return true;
 }
 
 int main(int argc, char **argv) {
@@ -87,6 +54,9 @@ int main(int argc, char **argv) {
     es_session *s = es_create(&d, argv[3]);
     if (!s) { fprintf(stderr, "es_create: %s\n", es_last_error()); return 1; }
     if (const char *c = getenv("ES_CONDITION")) { es_set_condition(s, atof(c)); printf("condition %.2f\n", atof(c)); }
+    if (getenv("ES_FX")) { const double g = atof(getenv("ES_FX")); es_set_effects(s, g, 0.2, g); }
+    es_set_lowpass(s, 400, 2500, 1.5, d.idleRpm);
+    int backfires = 0, phaseBackfires[4] = { 0, 0, 0, 0 };
 
     // scenario: crank + idle 3 s, full-throttle sweep idle -> redline 5 s, hold 1 s, lift and fall 3 s
     const double dt = 1 / 60.0, total = 12.0;
@@ -109,6 +79,7 @@ int main(int argc, char **argv) {
         if (getenv("ES_BOOST")) es_set_boost(s, t >= 3 && t < 9 ? atof(getenv("ES_BOOST")) : 1.0);
         es_set_throttle(s, thr);
         es_update(s, dt);
+        { const int b = es_get_backfires(s); backfires += b; phaseBackfires[t < 3 ? 0 : t < 8 ? 1 : t < 9 ? 2 : 3] += b; }
 
         // consumer: exactly real-time worth of audio per frame
         owed += dt * ES_SAMPLE_RATE;
@@ -133,6 +104,7 @@ int main(int argc, char **argv) {
         }
     }
     const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    printf("backfires %d (idle %d, sweep %d, limiter %d, lift-off %d)\n", backfires, phaseBackfires[0], phaseBackfires[1], phaseBackfires[2], phaseBackfires[3]);
     printf("simulated %.1f s in %.2f s wall (%.2fx real time), underrun %ld samples (%.1f%%)\n",
         total, wall, total / wall, underrun, 100.0 * underrun / std::max<size_t>(1, pcm.size()));
 

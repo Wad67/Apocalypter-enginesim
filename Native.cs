@@ -145,6 +145,75 @@ namespace EngineSim
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern void es_set_volume(IntPtr s, double volume);
 
+        // drive mode: the engine powers the game's drivetrain (see enginesim_api.h)
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_drive_mode(IntPtr s, int on);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_starter(IntPtr s, int on);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_idle_rpm(IntPtr s, double rpm);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double es_get_torque(IntPtr s);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_fuel(IntPtr s, int available);
+
+        public const int MaxTurbos = 4;
+
+        // es_induction_desc: forced induction as machines (drive mode)
+        [StructLayout(LayoutKind.Sequential)]
+        public struct InductionDesc
+        {
+            public float superchargerSize;
+            public float superchargerReliefPsi;
+            public int turbos;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxTurbos)] public float[] turboSize;
+            public float wastegatePsi;
+        }
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_induction(IntPtr s, ref InductionDesc desc);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_get_induction(IntPtr s, out double boostPsi, [Out] double[] turboSpeed, out double superchargerKw);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int es_get_blowoffs(IntPtr s, out double psi);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double es_get_crank_inertia(IntPtr s);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double es_get_starter_load(IntPtr s);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int es_get_starter_jammed(IntPtr s);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_starting(IntPtr s, double hardStart, int starterGivesUp);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_heat(IntPtr s, double heat);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_lowpass(IntPtr s, double crankHz, double idleHz, double openAt, double idleRpm);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_effects(IntPtr s, double backfireGain, double backfireChance, double valveGain);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int es_get_backfires(IntPtr s);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_get_exhaust(IntPtr s, out double flow, out double fuel, out double temperature);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double es_get_torque_raw(IntPtr s);
+
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern int es_update(IntPtr s, double dt);
 

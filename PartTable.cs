@@ -15,6 +15,8 @@ namespace EngineSim
         public long Id;
         public string Label;   // the comment after the section header, for the log only
         public Native.EngineParams Params;
+        public float DriveTorqueScale = 1f;   // [Experimental] simulated drivetrain: matches the game's rated power
+        public float PeakTorque;              // simulated peak torque at 1 atm, N m (0 = unknown): sizes the clutch
     }
 
     // An exhaust's sound, relative to the base sound with no exhaust fitted. The base is set in
@@ -58,6 +60,16 @@ namespace EngineSim
     {
         public long EngineId, ExhaustId, InductionId;
         public GameObject Engine, Exhaust;
+        // every fitted forced-induction part (with the simulated drivetrain a turbo and a supercharger
+        // can be fitted together)
+        public List<KeyValuePair<long, GameObject>> Induction;
+    }
+
+    // a forced-induction part: its set pressure (psi over ambient) and the relative size of each unit
+    internal sealed class InductionPart
+    {
+        public float Psi;
+        public float[] Sizes;
     }
 
     internal static class PartTable
@@ -67,36 +79,39 @@ namespace EngineSim
         private const string BaseIr = "-";
 
         public const string DefaultTurbo = "default_turbo", DefaultSupercharger = "default_supercharger";
-        private const string InductionHeader = "# Engine Sim forced induction (format 1).";
+        private const string InductionHeader = "# Engine Sim forced induction (format 2).";
         private const string InductionDefaults = InductionHeader + @"
-# The turbos or superchargers of each forced-induction part, as relative sizes (1 = a medium single unit).
-# A part with several turbos lists one size per turbo, and each one gets its own spool sound. Whether a
-# part is a turbo or a supercharger, its power and its spool time are the game's.
+# Each forced-induction part: the pressure it is set to and its units.
 #
-# part id = size [, size ...]      # label (not read)
+# part id = set pressure : size [, size ...]      # label (not read)
 #   part id: the part prefab's Easy Save id (ES3Prefab.prefabId); 'default_turbo' and 'default_supercharger'
-#     are for parts not listed here.
-#   size: 0.2 - 3. A smaller turbo spools faster and lower in the revs, and whistles higher; the largest
-#     turbo of a part spools in the game's spool time. A larger supercharger whines lower and louder.
-#   Sizes follow the power gain: more boost, a bigger unit.
+#     are for parts not listed here. Whether a part is a turbo or a supercharger is the part's own.
+#   set pressure: psi over ambient. With the simulated drivetrain (experimental) a turbo's wastegate or a
+#     supercharger's relief valve opens there, if the engine and the unit can get that far at all.
+#     Without it this is not used: the game's own boost applies. The defaults are the game's power gain
+#     as pressure (the simulated engine makes about 1 + 1.65 (p - 1) the torque at pressure ratio p).
+#   size: 0.2 - 3, one per turbo (a part with several turbos lists each). 1 = a medium unit: for a
+#     supercharger 2 L of air per crank revolution, for a turbo a 50 mm compressor wheel. A smaller turbo
+#     spools sooner and whistles higher; a bigger supercharger moves more air, takes more power to drive,
+#     and whines lower and louder.
 
-default_turbo        = 1.0
-default_supercharger = 1.0
+default_turbo        = 4.5 : 1.0
+default_supercharger = 4.5 : 1.0
 
-8359398305947690842  = 0.55              # Turbo - Little Bee - Power x1.05
-1254148493211391348  = 0.65              # Turbo - War Whistle - Power x1.09
-8589483064466669470  = 0.85, 0.85        # Turbo - Double Trouble - Power x1.5 (twin)
-8446457777719976447  = 1.4               # Turbo - Big Brutus - Power x1.6
-865075917467842793   = 0.6, 0.6, 1.4     # Turbo - Triple Threat - Power x1.7 (two small, one large)
+8359398305947690842  = 0.45 : 0.55            # Turbo - Little Bee - Power x1.05
+1254148493211391348  = 0.8  : 0.65            # Turbo - War Whistle - Power x1.09
+8589483064466669470  = 4.45 : 0.85, 0.85      # Turbo - Double Trouble - Power x1.5 (twin)
+8446457777719976447  = 5.3  : 1.4             # Turbo - Big Brutus - Power x1.6
+865075917467842793   = 6.2  : 0.6, 0.6, 1.4   # Turbo - Triple Threat - Power x1.7 (two small, one large)
 
-7322277502189585245  = 0.55              # Supercharger - Tiny Tim - Power x1.05
-3060985782920507676  = 0.65              # Supercharger - Small Sam - Power x1.09
-1280457821324750492  = 0.8               # Supercharger - Med Mark - Power x1.2
-7895438034034407351  = 1.25              # supercharger_4 - Power x1.5
-1235638759040636875  = 1.4               # Supercharger - The Average - Power x1.6
-3556354107990682579  = 1.0, 1.0          # Supercharger - Double Barrel - Power x1.7 (twin)
-8130352843546044666  = 1.7               # Supercharger - Big Joe - Power x1.8
-3223342285364861050  = 1.85              # Supercharger - Screaming Skull - Power x1.9
+7322277502189585245  = 0.45 : 0.55            # Supercharger - Tiny Tim - Power x1.05
+3060985782920507676  = 0.8  : 0.65            # Supercharger - Small Sam - Power x1.09
+1280457821324750492  = 1.8  : 0.8             # Supercharger - Med Mark - Power x1.2
+7895438034034407351  = 4.45 : 1.25            # supercharger_4 - Power x1.5
+1235638759040636875  = 5.3  : 1.4             # Supercharger - The Average - Power x1.6
+3556354107990682579  = 6.2  : 1.0, 1.0        # Supercharger - Double Barrel - Power x1.7 (twin)
+8130352843546044666  = 7.1  : 1.7             # Supercharger - Big Joe - Power x1.8
+3223342285364861050  = 8.0  : 1.85            # Supercharger - Screaming Skull - Power x1.9
 ";
 
         private const string ExhaustsHeader = "# Engine Sim exhaust profiles (format 6).";
@@ -145,7 +160,7 @@ default              = -, 0.95, 0.25, 1.0, 0.85
         }
 
         private static readonly TableFile EnginesFile = new TableFile(), ExhaustsFile = new TableFile(), InductionFile = new TableFile();
-        private static Dictionary<string, float[]> _induction = new Dictionary<string, float[]>();
+        private static Dictionary<string, InductionPart> _induction = new Dictionary<string, InductionPart>();
         private static Dictionary<long, EngineSpec> _engines = new Dictionary<long, EngineSpec>();
         private static Dictionary<string, ExhaustProfile> _exhausts = new Dictionary<string, ExhaustProfile>();
 
@@ -225,9 +240,9 @@ default              = -, 0.95, 0.25, 1.0, 0.85
             return table;
         }
 
-        private static Dictionary<string, float[]> LoadInduction()
+        private static Dictionary<string, InductionPart> LoadInduction()
         {
-            var table = new Dictionary<string, float[]>();
+            var table = new Dictionary<string, InductionPart>();
             InductionFile.Stamp = File.GetLastWriteTimeUtc(InductionFile.Path);
             foreach (var row in Rows(InductionFile.Path))
             {
@@ -237,10 +252,15 @@ default              = -, 0.95, 0.25, 1.0, 0.85
                     var key = row.Key.ToLowerInvariant();
                     if (key != DefaultTurbo && key != DefaultSupercharger && !long.TryParse(key, NumberStyles.Integer, CultureInfo.InvariantCulture, out unused))
                         throw new FormatException("'" + row.Key + "' is not a part id, '" + DefaultTurbo + "' or '" + DefaultSupercharger + "'");
-                    var sizes = row.Values.Select(v => Num(v)).ToArray();
+                    var all = string.Join(",", row.Values.ToArray());
+                    int colon = all.IndexOf(':');
+                    if (colon < 0) throw new FormatException("expected 'set pressure : size [, size ...]'");
+                    float psi = Num(all.Substring(0, colon));
+                    var sizes = all.Substring(colon + 1).Split(',').Select(v => Num(v)).ToArray();
+                    if (psi < 0f || psi > 60f) throw new FormatException("set pressure is 0 - 60 psi");
                     if (sizes.Length < 1 || sizes.Length > 4) throw new FormatException("expected 1 - 4 sizes");
                     if (sizes.Any(x => x < 0.2f || x > 3f)) throw new FormatException("sizes are 0.2 - 3");
-                    table[key] = sizes;
+                    table[key] = new InductionPart { Psi = psi, Sizes = sizes };
                 }
                 catch (Exception e) { row.Warn(InductionFile.Path, e); }
             }
@@ -249,14 +269,18 @@ default              = -, 0.95, 0.25, 1.0, 0.85
 
         // The turbos (or superchargers) of a forced-induction part: one relative size each. Parts not
         // listed (id 0 = not found) use the default line for their type.
-        public static float[] InductionUnits(long id, bool supercharger)
+        public static float[] InductionUnits(long id, bool supercharger) { return Induction(id, supercharger).Sizes; }
+
+        public static InductionPart Induction(long id, bool supercharger)
         {
             Reload(false);
-            float[] sizes;
-            if (id != 0 && _induction.TryGetValue(id.ToString(CultureInfo.InvariantCulture), out sizes)) return sizes;
-            if (_induction.TryGetValue(supercharger ? DefaultSupercharger : DefaultTurbo, out sizes)) return sizes;
-            return new[] { 1f };
+            InductionPart part;
+            if (id != 0 && _induction.TryGetValue(id.ToString(CultureInfo.InvariantCulture), out part)) return part;
+            if (_induction.TryGetValue(supercharger ? DefaultSupercharger : DefaultTurbo, out part)) return part;
+            return new InductionPart { Psi = 4.5f, Sizes = new[] { 1f } };
         }
+
+        public static bool IsInduction(long id) { Reload(false); return _induction.ContainsKey(id.ToString(CultureInfo.InvariantCulture)); }
 
         private sealed class Row
         {
@@ -318,14 +342,18 @@ default              = -, 0.95, 0.25, 1.0, 0.85
         // Engines are the parts listed in the engine table; exhausts those in the exhaust table.
         public static FittedParts Fitted(VehicleController vc)
         {
-            var fitted = new FittedParts();
+            var fitted = new FittedParts { Induction = new List<KeyValuePair<long, GameObject>>() };
             if (vc == null) return fitted;
             foreach (var p in vc.GetComponentsInChildren<ES3Prefab>(false))
             {
                 if (p.GetComponent<Rigidbody>() != null) continue;
                 if (fitted.EngineId == 0 && IsEngine(p.prefabId)) { fitted.EngineId = p.prefabId; fitted.Engine = p.gameObject; }
                 else if (fitted.ExhaustId == 0 && IsExhaust(p.prefabId)) { fitted.ExhaustId = p.prefabId; fitted.Exhaust = p.gameObject; }
-                else if (fitted.InductionId == 0 && _induction.ContainsKey(p.prefabId.ToString(CultureInfo.InvariantCulture))) fitted.InductionId = p.prefabId;
+                else if (_induction.ContainsKey(p.prefabId.ToString(CultureInfo.InvariantCulture)))
+                {
+                    if (fitted.InductionId == 0) fitted.InductionId = p.prefabId;
+                    fitted.Induction.Add(new KeyValuePair<long, GameObject>(p.prefabId, p.gameObject));
+                }
             }
             return fitted;
         }

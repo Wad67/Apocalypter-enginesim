@@ -27,6 +27,9 @@ namespace EngineSim
         {
             public float Size, Weight, Detune, Spool;
             public AudioSource Source;
+            // with the simulated drivetrain: the unit's own clip, and which simulated turbo it is (-1: the blower)
+            public AudioClip Clip;
+            public int Turbo = -1;
         }
 
         private sealed class State
@@ -38,6 +41,10 @@ namespace EngineSim
             public GameObject Holder;
             public Rolloff Rolloff;
             public float Load, NextScan, NextStats;
+            // with the simulated drivetrain: the fitted parts the units were built for, and the blow-off clip
+            public string MachineKey;
+            public AudioClip Flutter;
+            public AudioSource FlutterSource;
         }
 
         private static readonly ConditionalWeakTable<TurboWhistleComponent, State> States =
@@ -54,6 +61,16 @@ namespace EngineSim
                 return;
             }
             var engine = vc.powertrain.engine;
+
+            // with the simulated drivetrain the units are the simulation's machines
+            var session = DriveCoupling.SessionOf(engine);
+            if (session != null)
+            {
+                MachineSound(__instance, st, session);
+                return;
+            }
+            if (st.MachineKey != null) Release(st);
+
             var fi = engine.forcedInduction;
             if (fi == null || !fi.useForcedInduction)
             {
@@ -143,6 +160,149 @@ namespace EngineSim
             }
         }
 
+        // Experimental: each fitted part's units, each with the part's own clip (a turbo and a supercharger
+        // together each sound as themselves). A turbo whistles with its simulated shaft speed; the blower
+        // whines with the crank, louder the harder it is driven; the blow-off valve flutters when the
+        // simulated one lets go, at the game's flutter volume and as loud as the boost it dumps.
+        private static void MachineSound(TurboWhistleComponent whistle, State st, EngineSession session)
+        {
+            var stock = whistle.source;
+            var vc = whistle.vehicleController;
+            var engine = vc.powertrain.engine;
+            if (Time.unscaledTime >= st.NextScan || st.Holder == null)
+            {
+                st.NextScan = Time.unscaledTime + 1f;
+                if (session.InductionKey != st.MachineKey || st.Holder == null) BuildMachines(st, stock, vc);
+            }
+            stock.volume = 0f;
+            if (st.Units.Length == 0) return;
+
+            float rpm = Mathf.Clamp01(engine.OutputRPM / Mathf.Max(1000f, engine.revLimiterRPM));
+            bool turning = engine.OutputRPM > 50f;
+            var ear = Listener.Current;
+            float gain = ear == null ? 1f : st.Rolloff.Gain(Vector3.Distance(ear.transform.position, st.Holder.transform.position));
+            float master = vc.soundManager.masterVolume;
+
+            foreach (var u in st.Units)
+            {
+                if (u.Source == null || u.Clip == null) continue;
+                float volume, pitch;
+                if (u.Turbo < 0)
+                {
+                    // driven 1.3x crank speed; louder with the power going into it
+                    float work = Mathf.Clamp01(session.SuperchargerKw / (10f * u.Size));
+                    u.Spool = turning ? rpm : 0f;
+                    pitch = Plugin.SuperchargerPitchEntry.Value * Mathf.Max(0.05f, rpm) / Mathf.Sqrt(u.Size);
+                    volume = turning ? Plugin.SuperchargerVolumeEntry.Value * u.Weight * (0.2f + 0.8f * rpm) * Mathf.Lerp(0.4f, 1f, work) : 0f;
+                }
+                else
+                {
+                    u.Spool = session.TurboSpeed(u.Turbo);
+                    pitch = Mathf.Lerp(Plugin.TurboPitchLowEntry.Value, Plugin.TurboPitchHighEntry.Value, u.Spool) / Mathf.Sqrt(u.Size);
+                    volume = Plugin.TurboVolumeEntry.Value * u.Weight * u.Spool * u.Spool;
+                }
+                u.Source.pitch = Mathf.Max(0.01f, whistle.pitchRange * pitch * u.Detune);
+                u.Source.volume = Mathf.Clamp01(volume * gain * master);
+                if (volume > 0.001f && !u.Source.isPlaying)
+                {
+                    u.Source.time = Random.value * u.Clip.length;   // units out of phase
+                    u.Source.Play();
+                }
+                else if (volume <= 0.001f && u.Source.isPlaying) u.Source.Stop();
+            }
+
+            float letGo;
+            if (session.TakeBlowOffs(out letGo) > 0 && st.Flutter != null && st.FlutterSource != null)
+            {
+                st.FlutterSource.pitch = Random.Range(0.95f, 1.05f);
+                // at the game's own flutter volume, by how much boost it lets go of
+                var flutter = vc.soundManager.turboFlutterComponent;
+                float baseVolume = flutter != null ? flutter.baseVolume : 1f;
+                st.FlutterSource.PlayOneShot(st.Flutter, Mathf.Clamp01(0.3f + letGo / 10f) * baseVolume * gain * master);
+            }
+
+            if (Plugin.VerboseLogEntry.Value && Time.unscaledTime >= st.NextStats)
+            {
+                st.NextStats = Time.unscaledTime + 5f;
+                var sb = new StringBuilder("[induction] " + vc.name + ": boost " + session.BoostPsi.ToString("0.0") + " psi, blower "
+                    + session.SuperchargerKw.ToString("0.0") + " kW, distance gain " + gain.ToString("0.00"));
+                foreach (var u in st.Units)
+                    sb.Append("; ").Append(u.Turbo < 0 ? "blower " : "turbo ").Append(u.Size.ToString("0.##"))
+                      .Append(" (").Append(u.Clip != null ? u.Clip.name : "no clip").Append(") speed ").Append(u.Spool.ToString("0.00"))
+                      .Append(" vol ").Append(u.Source != null ? u.Source.volume.ToString("0.000") : "-");
+                Plugin.Log.LogInfo(sb.ToString());
+            }
+        }
+
+        // the units of every fitted part, in the order the simulation numbers its turbos (InductionMachines.Describe)
+        private static void BuildMachines(State st, AudioSource stock, VehicleController vc)
+        {
+            Release(st);
+            var units = new System.Collections.Generic.List<Unit>();
+            int turbo = 0;
+            bool blower = false;
+            AudioClip flutter = null;
+            foreach (var kv in PartTable.Fitted(vc).Induction)
+            {
+                bool supercharger = InductionMachines.IsSupercharger(kv.Value);
+                var part = PartTable.Induction(kv.Key, supercharger);
+                AudioClip clip, partFlutter;
+                InductionMachines.Clips(kv.Value, out clip, out partFlutter);
+                if (clip == null) clip = stock.clip;
+                if (supercharger)
+                {
+                    if (blower) continue;
+                    blower = true;
+                    units.Add(new Unit { Size = part.Sizes.Sum(), Clip = clip });
+                }
+                else
+                {
+                    if (flutter == null) flutter = partFlutter;
+                    foreach (float size in part.Sizes)
+                        if (turbo < Native.MaxTurbos) units.Add(new Unit { Size = size, Clip = clip, Turbo = turbo++ });
+                }
+            }
+            st.Holder = new GameObject("EngineSim Induction");
+            st.Holder.transform.SetParent(stock.transform, false);
+            st.Rolloff = new Rolloff(stock);
+            float sizeSum = Mathf.Max(1f, units.Sum(u => u.Size));
+            for (int i = 0; i < units.Count; ++i)
+            {
+                var u = units[i];
+                u.Source = NewSource(st.Holder, stock, u.Clip);
+                u.Weight = Mathf.Sqrt(u.Size) / Mathf.Sqrt(sizeSum);
+                u.Detune = 1f + 0.02f * (i - (units.Count - 1) / 2f);
+            }
+            st.Units = units.ToArray();
+            st.Flutter = flutter;
+            st.FlutterSource = flutter != null ? NewSource(st.Holder, stock, null) : null;
+            st.MachineKey = PartTable.Fitted(vc).Induction.Count > 0 ? InductionKeyOf(vc) : "";
+            Plugin.Verbose("induction sound " + vc.name + ": " + string.Join(", ", st.Units.Select(u => (u.Turbo < 0 ? "blower " : "turbo ")
+                + u.Size.ToString("0.##") + " (" + (u.Clip != null ? u.Clip.name : "no clip") + ")").ToArray())
+                + (flutter != null ? ", blow-off " + flutter.name : ""));
+        }
+
+        private static string InductionKeyOf(VehicleController vc)
+        {
+            string key;
+            InductionMachines.Describe(PartTable.Fitted(vc), out key);
+            return key;
+        }
+
+        private static AudioSource NewSource(GameObject holder, AudioSource stock, AudioClip clip)
+        {
+            var src = holder.AddComponent<AudioSource>();
+            src.clip = clip;
+            src.outputAudioMixerGroup = stock.outputAudioMixerGroup;
+            src.loop = clip != null;
+            src.playOnAwake = false;
+            src.spatialBlend = 0f;
+            src.dopplerLevel = 0f;
+            src.priority = stock.priority;
+            src.volume = clip != null ? 0f : 1f;
+            return src;
+        }
+
         // One source per unit, playing like the stock whistle source (same clip and mixer, its distance
         // rolloff applied by hand) but 2D.
         private static void Build(State st, AudioSource stock, float[] sizes)
@@ -184,6 +344,9 @@ namespace EngineSim
             st.Units = new Unit[0];
             st.PartId = -1;
             st.Sizes = null;
+            st.MachineKey = null;
+            st.Flutter = null;
+            st.FlutterSource = null;
             st.NextScan = 0f;   // rebuilt on the next update
         }
     }

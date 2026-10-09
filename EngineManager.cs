@@ -24,6 +24,8 @@ namespace EngineSim
             AccessTools.FieldRefAccess<RealisticEngineSound, AudioMixerGroup>("_choosedAudioMixer");
 
         private readonly Dictionary<RealisticEngineSound, EngineSession> _sessions = new Dictionary<RealisticEngineSound, EngineSession>();
+        private readonly Dictionary<RealisticEngineSound, DriveCoupling> _couplings = new Dictionary<RealisticEngineSound, DriveCoupling>();
+        private readonly Dictionary<RealisticEngineSound, EngineEffects> _effects = new Dictionary<RealisticEngineSound, EngineEffects>();
         private readonly Dictionary<RealisticEngineSound, float> _lastRunning = new Dictionary<RealisticEngineSound, float>();
         private readonly HashSet<string> _reported = new HashSet<string>();
         private float _nextScan;
@@ -54,12 +56,20 @@ namespace EngineSim
                 Scan();
             }
 
+            // with the simulated drivetrain: a turbo and a supercharger fit together
+            if (Plugin.SimDriveEntry.Value) TwinchargeMount.Update(_sessions.Values);
+
             if (_listener == null || !_listener.isActiveAndEnabled) _listener = FindListener();
             var ear = _listener != null ? _listener.transform : null;
-            foreach (var s in _sessions.Values)
+            foreach (var kv in _sessions)
             {
-                Feed(s);
-                s.UpdateDistance(ear);
+                DriveCoupling coupling;
+                _couplings.TryGetValue(kv.Key, out coupling);
+                Feed(kv.Value, coupling);
+                kv.Value.UpdateDistance(ear);
+                if (coupling != null) coupling.Update();
+                EngineEffects fx;
+                if (_effects.TryGetValue(kv.Key, out fx)) fx.Update();
             }
 
             if (Plugin.VerboseLogEntry.Value && Time.unscaledTime >= _nextStats && _sessions.Count > 0)
@@ -74,19 +84,58 @@ namespace EngineSim
 
         private void OnDestroy() { StopAll("runner destroyed"); }
 
-        private static void Feed(EngineSession s)
+        // The engine's torque reaction on the vehicle body, about the crank axis (the engine part's own
+        // axis, the one the game's shake and EngineRock turn it about). The physics runs at 50-100 Hz:
+        // the torque is smoothed to what it can carry (~10 Hz), which keeps stumbles, start / stop
+        // kicks and a twin's idle beat, not a V8's idle buzz.
+        private readonly Dictionary<EngineSession, float> _chassisTorque = new Dictionary<EngineSession, float>();
+
+        private void FixedUpdate()
+        {
+            float strength = Plugin.ChassisTorqueEntry.Value;
+            if (strength <= 0f || _sessions.Count == 0) return;
+            float dt = Time.fixedDeltaTime;
+            foreach (var s in _sessions.Values)
+            {
+                if (s.Vc == null || s.EnginePart == null || !s.Ready) continue;
+                var rb = s.Vc.vehicleRigidbody;
+                if (rb == null) continue;
+                float smoothed;
+                _chassisTorque.TryGetValue(s, out smoothed);
+                smoothed += (s.RawTorque - smoothed) * (1f - Mathf.Exp(-dt / 0.016f));
+                _chassisTorque[s] = smoothed;
+                Vector3 axis = s.EnginePart.transform.TransformDirection(Vector3.forward);
+                rb.AddTorque(axis * (smoothed * strength), ForceMode.Force);
+            }
+        }
+
+        private static void Feed(EngineSession s, DriveCoupling coupling)
         {
             if (s.Vc == null) return;
             var engine = s.Vc.powertrain.engine;
             float rpm = engine.OutputRPM;
-            // below this the game's engine is stopped; let the sim crank coast instead of holding it
-            s.SetControls(rpm > 50f ? rpm : 0f, engine.ThrottlePosition, engine.IsRunning, ReadCondition(s));
+            if (s.Drive)
+            {
+                // the game's speed, set by the simulated engine's own torque; the throttle is cut while shifting
+                bool shiftCut = s.Vc.powertrain.transmission.isShifting && rpm > engine.idleRPM;
+                bool key = coupling != null ? coupling.KeyOn : engine.ignition;
+                s.SetControls(rpm, shiftCut ? 0f : engine.ThrottlePosition, key, ReadCondition(s));
+            }
+            else
+            {
+                // below this the game's engine is stopped; let the sim crank coast instead of holding it
+                s.SetControls(rpm > 50f ? rpm : 0f, engine.ThrottlePosition, engine.IsRunning, ReadCondition(s));
+            }
             // the game's rev limit (its own cut is a one-frame flag, or none: RPM is just clamped), and
-            // forced induction as an intake pressure ratio matching the game's power gain
+            // forced induction as intake pressure: the simulated engine's power rises about 1.65x as fast
+            // as the pressure ratio (measured on its engines), so this gives the game's power gain
+            // (with the simulated drivetrain the fitted units are machines on the simulated engine instead)
             var fi = engine.forcedInduction;
+            float gain = fi != null && fi.useForcedInduction ? fi.PowerGainMultiplier : 1f;
+            if (s.Drive) InductionMachines.Update(s);
             s.SetLimits(engine.revLimiterRPM,
                 engine.revLimiterCutoffDuration > 0.02f ? engine.revLimiterCutoffDuration : 0.08f,
-                fi != null && fi.useForcedInduction ? fi.PowerGainMultiplier : 1f);
+                s.Drive ? 1f : 1f + (gain - 1f) / 1.65f);
         }
 
         private void Scan()
@@ -104,7 +153,9 @@ namespace EngineSim
                 var engine = vc.powertrain.engine;
                 if (engine.engineType != EngineComponent.EngineType.ICE) continue;
 
-                if (engine.IsRunning || engine.starterActive || engine.OutputRPM > 50f) _lastRunning[res] = now;
+                // with the simulated drivetrain an engine whose key is on is kept (not turning, or about to crank)
+                if (engine.IsRunning || engine.starterActive || engine.OutputRPM > 50f
+                    || (Plugin.SimDriveEntry.Value && DriveCoupling.KeyIsOn(vc))) _lastRunning[res] = now;
                 float last;
                 if (!_lastRunning.TryGetValue(res, out last) || now - last > KeepAliveSeconds) continue;
 
@@ -182,8 +233,22 @@ namespace EngineSim
             }
 
             var mixer = ChosenMixer(res) ?? res.audioMixer;
-            var session = new EngineSession(res, vc, part, fitted, loudness, desc, IrDirectory, mixer);
+            bool drive = Plugin.SimDriveEntry.Value;
+            // with the simulated drivetrain: the fitted machines
+            string inductionKey = "";
+            var induction = new Native.InductionDesc { turboSize = new float[Native.MaxTurbos] };
+            if (drive) induction = InductionMachines.Describe(fitted, out inductionKey);
+            var session = new EngineSession(res, vc, part, fitted, loudness, desc, IrDirectory, mixer,
+                drive, Plugin.MatchGamePowerEntry.Value ? spec.DriveTorqueScale : 1f, spec.PeakTorque);
             _sessions[res] = session;
+            if (drive)
+            {
+                session.InductionKey = inductionKey;
+                session.SetInduction(induction);
+                _couplings[res] = new DriveCoupling(session);
+                Plugin.Log.LogInfo(vc.name + ": forced induction " + InductionMachines.Describe(induction));
+            }
+            _effects[res] = new EngineEffects(session);
             ResPatch.Take(res);
             Plugin.Log.LogInfo("Simulating " + vc.name + ": engine " + spec.Id + " '" + part + "' -> " + desc
                 + "; exhaust " + (fitted.ExhaustId != 0 ? fitted.ExhaustId + " -> " : "none fitted -> ")
@@ -195,6 +260,19 @@ namespace EngineSim
             EngineSession s;
             if (!_sessions.TryGetValue(res, out s)) return;
             _sessions.Remove(res);
+            DriveCoupling coupling;
+            if (_couplings.TryGetValue(res, out coupling))
+            {
+                coupling.Release();   // the game's own engine model again
+                _couplings.Remove(res);
+            }
+            EngineEffects fx;
+            if (_effects.TryGetValue(res, out fx))
+            {
+                fx.Release();
+                _effects.Remove(res);
+            }
+            _chassisTorque.Remove(s);
             s.Stop();
             if (res != null) ResPatch.Release(res);
             else ResPatch.Prune();

@@ -17,7 +17,7 @@ namespace EngineSim
     // the five basic keys; any other key left out gets a generic default worked out from those five.
     internal static class EngineConfig
     {
-        public const string Header = "# Engine Sim engines (format 2).";
+        public const string Header = "# Engine Sim engines (format 6).";
 
         private enum Kind { Float, PerCylinder, PerCylinderInt, PerBank, PortFlow, Timing }
 
@@ -30,6 +30,9 @@ namespace EngineSim
 
         // the five basic keys, which the defaults are worked out from
         private static readonly string[] BasicKeys = { "cylinders", "layout", "bank_angle", "displacement", "fuel" };
+
+        // read by the plugin itself, not part of the native parameters
+        private const string DriveTorqueScaleKey = "drive_torque_scale", PeakTorqueKey = "peak_torque";
 
         private static readonly Key[] Keys =
         {
@@ -186,11 +189,35 @@ namespace EngineSim
                     Plugin.Log.LogWarning(fileName + " line " + raw.Key + ": " + k.Name + " ignored (default kept): " + e.Message);
                 }
             }
+            float driveScale = 1f;
+            KeyValuePair<int, string> scaleRaw;
+            if (sec.Values.TryGetValue(DriveTorqueScaleKey, out scaleRaw))
+            {
+                try
+                {
+                    driveScale = Num(scaleRaw.Value);
+                    if (driveScale < 0.1f || driveScale > 5f) throw new FormatException("must be 0.1 - 5");
+                }
+                catch (Exception e)
+                {
+                    driveScale = 1f;
+                    Plugin.Log.LogWarning(fileName + " line " + scaleRaw.Key + ": " + DriveTorqueScaleKey + " ignored (1 kept): " + e.Message);
+                }
+            }
+
+            float peakTorque = 0f;
+            KeyValuePair<int, string> peakRaw;
+            if (sec.Values.TryGetValue(PeakTorqueKey, out peakRaw))
+            {
+                try { peakTorque = Math.Max(0f, Num(peakRaw.Value)); }
+                catch (Exception e) { Plugin.Log.LogWarning(fileName + " line " + peakRaw.Key + ": " + PeakTorqueKey + " ignored: " + e.Message); }
+            }
+
             foreach (var key in sec.Values.Keys)
-                if (!BasicKeys.Contains(key) && !Keys.Any(k => k.Name == key))
+                if (!BasicKeys.Contains(key) && key != DriveTorqueScaleKey && key != PeakTorqueKey && !Keys.Any(k => k.Name == key))
                     Plugin.Log.LogWarning(fileName + " line " + sec.Values[key].Key + ": unknown key '" + key + "'");
 
-            return new EngineSpec { Id = sec.Id, Label = sec.Label, Params = (Native.EngineParams)boxed };
+            return new EngineSpec { Id = sec.Id, Label = sec.Label, Params = (Native.EngineParams)boxed, DriveTorqueScale = driveScale, PeakTorque = peakTorque };
         }
 
         private static string Required(Section sec, string key)
