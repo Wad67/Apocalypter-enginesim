@@ -30,13 +30,16 @@ struct BuiltEngine {
     void destroy();
 };
 
-// Builds an engine from a description, in place of engine-sim's .mr scripts
+// Generic parameters from an engine's five basic values, for the keys an engines.cfg section leaves out.
+bool defaultParams(int cylinders, int layout, float bankAngleDeg, float displacementL, int diesel, es_engine_params *out);
+
+// Builds an engine from its parameters, in place of engine-sim's .mr scripts
 // (mirrors es_script::EngineNode::buildEngine). irDirectory is only used to
 // form impulse-response file names; nothing is read here.
 bool buildEngine(const es_engine_desc &desc, const std::string &irDirectory, BuiltEngine *out, std::string *error);
 
-// Gas-dynamics sub-steps per physics step: the requested quality, but never below what the
-// cylinder size needs to stay stable at this physics rate.
+// Gas-dynamics sub-steps per physics step: the requested quality, but never below the engine's
+// minimum gas steps per second at this physics rate.
 int stableFluidSteps(const es_engine_desc &desc, double simulationFrequency, int requested);
 
 #endif /* ENGINESIM_ENGINE_BUILDER_H */

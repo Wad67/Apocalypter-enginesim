@@ -7,7 +7,7 @@
  * Threading: a session is NOT thread-safe. Every call on a session must come
  * from one thread (the plugin's sim thread). The synthesizer's own rendering
  * thread is never started; es_update() runs the simulation and renders the
- * audio on the calling thread. es_parse_engine_name() is pure and can be
+ * audio on the calling thread. es_default_params() is pure and can be
  * called from anywhere.
  *
  * Audio: es_read() returns mono int16 at ES_SAMPLE_RATE (fixed by engine-sim).
@@ -33,33 +33,86 @@ enum es_layout {
     ES_LAYOUT_BOXER = 2
 };
 
-/* Engine description. Units: litres, degrees, rpm. Plain C struct (4-byte members and one char array) so it marshals as-is. */
-typedef struct es_engine_desc {
+#define ES_MAX_CYLINDERS 16
+#define ES_MAX_BANKS 2
+#define ES_PORT_FLOW_SAMPLES 15   /* port flow every 50 thou (1.27 mm) of valve lift, 0 - 700 thou */
+#define ES_MAX_TIMING_SAMPLES 12
+
+/* Everything engine-sim is built from, per engine. Plain C (4-byte members, fixed arrays) so it
+   marshals as-is. Per-cylinder arrays are indexed by cylinder number - 1. es_default_params()
+   fills it with generic values from the five basic ones. Units: mm, cc, L, g, kg, Nm, cm2, degrees, rpm; flows are
+   cfm (at 28 inH2O for ports and blowby, through a carburettor for the rest). */
+typedef struct es_engine_params {
     int32_t cylinders;
-    int32_t layout;          /* es_layout */
-    float vAngleDeg;         /* bank angle for ES_LAYOUT_V */
-    float displacementL;
-    int32_t diesel;          /* 0 = gasoline */
+    int32_t layout;                     /* es_layout */
+    float bankAngleDeg;                 /* angle between the banks of a V */
+    float displacementL;                /* only used by es_default_params */
+    int32_t diesel;                     /* 0 = gasoline */
+
+    /* firing: crank angle each cylinder fires at within the 720 degree cycle, and its bank */
+    float firingAngleDeg[ES_MAX_CYLINDERS];
+    int32_t cylinderBank[ES_MAX_CYLINDERS];
+
+    /* bottom end */
+    float boreMm, strokeMm, rodLengthMm, compressionHeightMm, compressionRatio;
+    float pistonMassG, rodMassG;
+    float crankMassKg, flywheelMassKg, flywheelRadiusMm, frictionTorqueNm;
+    float starterTorqueNm, starterSpeedRpm;
+    float blowbyCfm;
+
+    /* intake */
+    float plenumVolumeL, plenumAreaCm2, intakeFlowCfm, runnerFlowCfm, runnerLengthMm;
+    float idleThrottlePlate;            /* closed throttle plate position, 0..1 (higher = less idle air) */
+    float throttleGamma, intakeVelocityDecay;
+
+    /* heads and cams */
+    float intakePortCfm[ES_PORT_FLOW_SAMPLES];
+    float exhaustPortCfm[ES_PORT_FLOW_SAMPLES];
+    float headFlowScale[ES_MAX_BANKS];
+    float intakeRunnerVolumeCc, intakeRunnerAreaCm2, exhaustRunnerVolumeCc, exhaustRunnerAreaCm2;
+    float intakeCamDurationDeg, intakeCamLiftMm, intakeCamGamma, intakeLobeCenterDeg;
+    float exhaustCamDurationDeg, exhaustCamLiftMm, exhaustCamGamma, exhaustLobeCenterDeg;
+    float camBaseRadiusMm;
+
+    /* exhaust manifold (an exhaust part adds to it) */
+    float collectorDiameterMm, outletFlowCfm, primaryLengthMm, primaryFlowCfm, exhaustVelocityDecay;
+    float exhaustVolume[ES_MAX_BANKS];          /* sound level of each bank's exhaust */
+    float headerLengthMm[ES_MAX_CYLINDERS];     /* per cylinder, sound path to the collector */
+    float soundAttenuation[ES_MAX_CYLINDERS];   /* per cylinder */
+
+    /* ignition */
+    int32_t timingSamples;
+    float timingRpm[ES_MAX_TIMING_SAMPLES], timingAdvanceDeg[ES_MAX_TIMING_SAMPLES];
+
+    /* combustion and simulation */
+    float burningEfficiency;
+    float simulationFrequency;          /* physics steps per second */
+    float minGasStepsPerSecond;         /* gas dynamics steps per second the cylinder size needs to stay stable */
+    float airNoise, jitter;             /* synthesizer; 0 = chosen to suit the impulse response */
+} es_engine_params;
+
+/* An engine to simulate: its parameters, the game's idle and rev limit, and the fitted exhaust. */
+typedef struct es_engine_desc {
+    es_engine_params engine;
     float redlineRpm;
     float idleRpm;
-    float powerHp;           /* informational (from the part name) */
-    float torqueNm;          /* informational (from the part name) */
 
     /* Exhaust. Zero / empty = defaults chosen from the engine. */
     char exhaustIr[64];      /* impulse-response file name inside irDirectory */
     float exhaustFlow;       /* outlet flow scale (restriction): 1 = default, higher = freer */
     float exhaustLengthM;    /* pipe length after the collector, metres */
     float headerScale;       /* primary (header) tube length scale */
-    float airNoise;          /* synthesizer air noise 0..1; bright (little-muffled) impulse responses need it low */
-    float jitter;            /* synthesizer input-sample jitter 0..1 */
+    float airNoise;          /* synthesizer air noise 0..1, overrides the engine's; 0 = the engine's */
+    float jitter;            /* synthesizer input-sample jitter 0..1, overrides the engine's; 0 = the engine's */
     int32_t fluidSteps;      /* gas dynamics sub-steps per physics step: quality vs CPU (engine-sim: 8) */
 } es_engine_desc;
 
 typedef struct es_session es_session;
 
-/* Parses the game's engine part names, e.g. "2.8L V6 115HP 183Nm Gasoline", "594cc I2 23HP 39Nm Gasoline".
-   Fills layout, cylinders, displacement, fuel, power, torque and sets defaults for the rest. Returns 1 on success. */
-ES_API int32_t es_parse_engine_name(const char *name, es_engine_desc *out);
+/* Fills every parameter of an engine with generic values from its cylinder count, layout, bank angle
+   (V only), displacement and fuel. Returns 1 on success. Pure, callable from any thread. */
+ES_API int32_t es_default_params(int32_t cylinders, int32_t layout, float bankAngleDeg, float displacementL,
+    int32_t diesel, es_engine_params *out);
 
 /* Builds the engine and the simulator. irDirectory holds the impulse-response .wav files.
    Returns NULL on failure; es_last_error() says why. */
@@ -103,6 +156,9 @@ ES_API double es_get_crank_speed(es_session *s);
 ES_API double es_get_processing_time_us(es_session *s);
 
 ES_API const char *es_last_error(void);
+
+/* sizeof(es_engine_desc), so the plugin can check its copy of the struct matches. */
+ES_API int32_t es_desc_size(void);
 
 #ifdef __cplusplus
 }

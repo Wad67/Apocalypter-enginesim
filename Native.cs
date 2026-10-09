@@ -14,18 +14,69 @@ namespace EngineSim
 
         public enum Layout { Inline = 0, V = 1, Boxer = 2 }
 
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-        public struct EngineDesc
+        public const int MaxCylinders = 16, MaxBanks = 2, PortFlowSamples = 15, MaxTimingSamples = 12;
+
+        // es_engine_params: everything engine-sim is built from (EngineSim.engines.cfg). Field order
+        // and sizes match enginesim_api.h exactly. Per-cylinder arrays are indexed by cylinder number - 1.
+        [StructLayout(LayoutKind.Sequential)]
+        public struct EngineParams
         {
             public int cylinders;
             public int layout;
-            public float vAngleDeg;
+            public float bankAngleDeg;
             public float displacementL;
             public int diesel;
+
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxCylinders)] public float[] firingAngleDeg;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxCylinders)] public int[] cylinderBank;
+
+            public float boreMm, strokeMm, rodLengthMm, compressionHeightMm, compressionRatio;
+            public float pistonMassG, rodMassG;
+            public float crankMassKg, flywheelMassKg, flywheelRadiusMm, frictionTorqueNm;
+            public float starterTorqueNm, starterSpeedRpm;
+            public float blowbyCfm;
+
+            public float plenumVolumeL, plenumAreaCm2, intakeFlowCfm, runnerFlowCfm, runnerLengthMm;
+            public float idleThrottlePlate;
+            public float throttleGamma, intakeVelocityDecay;
+
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = PortFlowSamples)] public float[] intakePortCfm;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = PortFlowSamples)] public float[] exhaustPortCfm;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxBanks)] public float[] headFlowScale;
+            public float intakeRunnerVolumeCc, intakeRunnerAreaCm2, exhaustRunnerVolumeCc, exhaustRunnerAreaCm2;
+            public float intakeCamDurationDeg, intakeCamLiftMm, intakeCamGamma, intakeLobeCenterDeg;
+            public float exhaustCamDurationDeg, exhaustCamLiftMm, exhaustCamGamma, exhaustLobeCenterDeg;
+            public float camBaseRadiusMm;
+
+            public float collectorDiameterMm, outletFlowCfm, primaryLengthMm, primaryFlowCfm, exhaustVelocityDecay;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxBanks)] public float[] exhaustVolume;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxCylinders)] public float[] headerLengthMm;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxCylinders)] public float[] soundAttenuation;
+
+            public int timingSamples;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxTimingSamples)] public float[] timingRpm;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaxTimingSamples)] public float[] timingAdvanceDeg;
+
+            public float burningEfficiency;
+            public float simulationFrequency;
+            public float minGasStepsPerSecond;
+            public float airNoise, jitter;
+
+            public override string ToString()
+            {
+                return (Layout)layout + cylinders.ToString() + (layout == (int)Layout.V ? " (" + bankAngleDeg + "°)" : "")
+                    + ", bore " + boreMm.ToString("0.#") + " x stroke " + strokeMm.ToString("0.#") + " mm"
+                    + (diesel != 0 ? ", diesel" : ", gasoline");
+            }
+        }
+
+        // es_engine_desc: an engine to simulate, with the game's idle and rev limit and the fitted exhaust
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+        public struct EngineDesc
+        {
+            public EngineParams engine;
             public float redlineRpm;
             public float idleRpm;
-            public float powerHp;
-            public float torqueNm;
 
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
             public string exhaustIr;
@@ -38,14 +89,25 @@ namespace EngineSim
 
             public override string ToString()
             {
-                return displacementL.ToString("0.###") + "L " + (Layout)layout + cylinders
-                    + (layout == (int)Layout.V ? " (" + vAngleDeg + "°)" : "")
-                    + (diesel != 0 ? " diesel" : " gasoline") + ", idle " + idleRpm + " / redline " + redlineRpm + " rpm";
+                return engine + ", idle " + idleRpm + " / limit " + redlineRpm + " rpm";
             }
         }
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int es_parse_engine_name([MarshalAs(UnmanagedType.LPStr)] string name, out EngineDesc desc);
+        private static extern int es_desc_size();
+
+        // the native library's es_engine_desc is the same size as ours (the plugin and native library match)
+        public static bool LayoutMatches(out string error)
+        {
+            int native = es_desc_size(), managed = Marshal.SizeOf(typeof(EngineDesc));
+            error = native == managed ? null : "engine description is " + native + " bytes in enginesim_native.dll but "
+                + managed + " in EngineSim.dll; the two files are from different versions";
+            return error == null;
+        }
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int es_default_params(int cylinders, int layout, float bankAngleDeg, float displacementL,
+            int diesel, out EngineParams p);
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr es_create(ref EngineDesc desc, [MarshalAs(UnmanagedType.LPStr)] string irDirectory);
@@ -119,7 +181,7 @@ namespace EngineSim
                 error = "LoadLibrary(" + path + ") failed, error " + Marshal.GetLastWin32Error();
                 return false;
             }
-            return true;
+            return LayoutMatches(out error);
         }
     }
 }

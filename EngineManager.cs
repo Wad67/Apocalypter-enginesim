@@ -34,6 +34,7 @@ namespace EngineSim
 
         private void Update()
         {
+            FsmDump.Tick();
             if (!Plugin.EnabledEntry.Value)
             {
                 if (_sessions.Count > 0) StopAll("disabled");
@@ -122,8 +123,12 @@ namespace EngineSim
                 var s = _sessions[res];
                 if (res == null || !wanted.Contains(res)) StopSession(res, "out of range / not running");
                 else if (s.Failed) StopSession(res, "failed: " + s.Error);
-                else if (FindEnginePart(s.Vc) != s.PartName) StopSession(res, "engine changed");
-                else if (FindExhaustPart(s.Vc) != s.ExhaustPart) StopSession(res, "exhaust changed");
+                else
+                {
+                    var fitted = PartTable.Fitted(s.Vc);
+                    if (fitted.EngineId != s.EngineId) StopSession(res, "engine changed");
+                    else if (fitted.ExhaustId != s.ExhaustId) StopSession(res, "exhaust changed");
+                }
             }
 
             foreach (var res in wanted)
@@ -135,27 +140,28 @@ namespace EngineSim
         private void TryStart(RealisticEngineSound res)
         {
             var vc = res.GetComponentInParent<VehicleController>();
-            string part = FindEnginePart(vc);
-            if (part == null)
+            var fitted = PartTable.Fitted(vc);
+            var spec = PartTable.Engine(fitted.EngineId);
+            if (spec == null)
             {
-                ReportOnce(vc.name + "/none", "no engine part found under " + vc.name + "'s hinge_engine; keeping the stock sound");
+                if (_reported.Add("noengine:" + vc.GetInstanceID()))
+                {
+                    var unlisted = PartTable.UnlistedParts(vc).Select(p => p.prefabId + " (" + p.name + ")").ToArray();
+                    Plugin.Log.LogWarning(vc.name + " has no engine listed in EngineSim.engines.cfg fitted; keeping the stock sound. "
+                        + "Its other fitted parts (part id, object): " + string.Join(", ", unlisted));
+                }
                 return;
             }
 
-            Native.EngineDesc desc;
-            if (Native.es_parse_engine_name(part, out desc) == 0)
-            {
-                ReportOnce(part, "cannot read engine part '" + part + "'; keeping the stock sound");
-                return;
-            }
+            string part = spec.Label ?? spec.Id.ToString();
+            var desc = new Native.EngineDesc { engine = spec.Params };
             desc.fluidSteps = Plugin.QualityEntry.Value == SimQuality.High ? 8 : Plugin.QualityEntry.Value == SimQuality.Fast ? 4 : 6;
             var engine = vc.powertrain.engine;
             if (engine.revLimiterRPM > 500f) desc.redlineRpm = engine.revLimiterRPM;
             if (engine.idleRPM > 100f) desc.idleRpm = engine.idleRPM;
 
-            string exhaust = FindExhaustPart(vc);
             ExhaustProfile profile;
-            var sound = ExhaustProfiles.Resolve(exhaust, out profile);
+            var sound = PartTable.ResolveExhaust(fitted.ExhaustId, out profile);
             if (!System.IO.File.Exists(System.IO.Path.Combine(IrDirectory, sound.Ir)))
             {
                 ReportOnce("ir:" + sound.Ir, "impulse response " + sound.Ir + " not found in " + IrDirectory + "; using the built-in choice");
@@ -171,17 +177,17 @@ namespace EngineSim
 
             if (Plugin.VerboseLogEntry.Value)
             {
-                PartDump.Once(FindPartObject(vc, "hinge_engine"), part);
-                PartDump.Once(FindPartObject(vc, "hinge_exhaust"), exhaust);
-                PartDump.InductionOnce(vc);
+                PartDump.Once(fitted.Engine, "engine " + fitted.EngineId);
+                PartDump.Once(fitted.Exhaust, "exhaust " + fitted.ExhaustId);
             }
 
             var mixer = ChosenMixer(res) ?? res.audioMixer;
-            var session = new EngineSession(res, vc, part, exhaust, loudness, desc, IrDirectory, mixer);
+            var session = new EngineSession(res, vc, part, fitted, loudness, desc, IrDirectory, mixer);
             _sessions[res] = session;
             ResPatch.Take(res);
-            Plugin.Log.LogInfo("Simulating " + vc.name + ": '" + part + "' -> " + desc
-                + "; exhaust '" + (exhaust ?? "(no exhaust slot)") + "' -> " + (profile != null ? profile.Pattern : "base") + ": " + sound);
+            Plugin.Log.LogInfo("Simulating " + vc.name + ": engine " + spec.Id + " '" + part + "' -> " + desc
+                + "; exhaust " + (fitted.ExhaustId != 0 ? fitted.ExhaustId + " -> " : "none fitted -> ")
+                + (profile != null ? profile.ToString() : "base") + ": " + sound);
         }
 
         private void StopSession(RealisticEngineSound res, string why)
@@ -211,7 +217,7 @@ namespace EngineSim
         {
             if (s.ConditionVar == null)
             {
-                var part = FindPartObject(s.Vc, "hinge_engine");
+                var part = s.EnginePart;
                 if (part == null) return 1f;
                 foreach (var fsm in part.GetComponentsInChildren<PlayMakerFSM>(true))
                 {
@@ -232,60 +238,6 @@ namespace EngineSim
         {
             foreach (var l in UnityEngine.Object.FindObjectsOfType<AudioListener>())
                 if (l.isActiveAndEnabled) return l;
-            return null;
-        }
-
-        // The fitted engine is a part under the vehicle's "hinge_engine", named like "2.8L V6 115HP 183Nm Gasoline".
-        internal static string FindEnginePart(VehicleController vc)
-        {
-            if (vc == null) return null;
-            var hinge = FindDeep(vc.transform, "hinge_engine");
-            if (hinge == null) return null;
-            foreach (Transform child in hinge)
-            {
-                if (!child.gameObject.activeSelf) continue;
-                string name = CleanName(child.name);
-                Native.EngineDesc unused;
-                if (Native.es_parse_engine_name(name, out unused) != 0) return name;
-            }
-            return null;
-        }
-
-        // The fitted exhaust under "hinge_exhaust": its part name, "none" for an empty slot,
-        // null when the vehicle has no exhaust slot at all.
-        internal static string FindExhaustPart(VehicleController vc)
-        {
-            if (vc == null) return null;
-            var hinge = FindDeep(vc.transform, "hinge_exhaust");
-            if (hinge == null) return null;
-            foreach (Transform child in hinge)
-                if (child.gameObject.activeSelf) return CleanName(child.name);
-            return ExhaustProfiles.None;
-        }
-
-        private static GameObject FindPartObject(VehicleController vc, string hingeName)
-        {
-            var hinge = FindDeep(vc.transform, hingeName);
-            if (hinge == null) return null;
-            foreach (Transform child in hinge)
-                if (child.gameObject.activeSelf) return child.gameObject;
-            return null;
-        }
-
-        // "(Clone)" from instantiation, and the instance number the game appends ("Gasoline160", "exhaust_the_four61")
-        private static string CleanName(string name)
-        {
-            return System.Text.RegularExpressions.Regex.Replace(name.Replace("(Clone)", "").Trim(), @"\d+$", "");
-        }
-
-        private static Transform FindDeep(Transform t, string name)
-        {
-            if (t.name == name) return t;
-            foreach (Transform c in t)
-            {
-                var r = FindDeep(c, name);
-                if (r != null) return r;
-            }
             return null;
         }
     }

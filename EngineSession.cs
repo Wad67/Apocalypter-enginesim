@@ -20,8 +20,9 @@ namespace EngineSim
 
         public readonly RealisticEngineSound Res;
         public readonly VehicleController Vc;
-        public readonly string PartName;
-        public readonly string ExhaustPart;
+        public readonly string PartName;     // the engine's label in EngineSim.engines.cfg, for the log
+        public readonly long EngineId, ExhaustId;
+        public readonly GameObject EnginePart;
         public HutongGames.PlayMaker.FsmFloat ConditionVar;   // main thread only; see EngineManager.ReadCondition
         private readonly float _loudness;
         public readonly Native.EngineDesc Desc;
@@ -53,13 +54,15 @@ namespace EngineSim
         public long UnderrunSamples { get { return _output != null ? _output.UnderrunFrames : 0; } }
         public int RingFill { get { return _ring.Count; } }
 
-        public EngineSession(RealisticEngineSound res, VehicleController vc, string partName, string exhaustPart, float loudness,
+        public EngineSession(RealisticEngineSound res, VehicleController vc, string partName, FittedParts parts, float loudness,
             Native.EngineDesc desc, string irDir, AudioMixerGroup mixer)
         {
             Res = res;
             Vc = vc;
             PartName = partName;
-            ExhaustPart = exhaustPart;
+            EngineId = parts.EngineId;
+            ExhaustId = parts.ExhaustId;
+            EnginePart = parts.Engine;
             _loudness = loudness;
             Desc = desc;
             _irDir = irDir;
@@ -195,6 +198,28 @@ namespace EngineSim
         }
     }
 
+    // The active AudioListener (the camera's), looked up at most twice a second.
+    internal static class Listener
+    {
+        private static AudioListener _current;
+        private static float _nextLookup;
+
+        public static AudioListener Current
+        {
+            get
+            {
+                if ((_current == null || !_current.isActiveAndEnabled) && Time.unscaledTime >= _nextLookup)
+                {
+                    _nextLookup = Time.unscaledTime + 0.5f;
+                    _current = null;
+                    foreach (var l in UnityEngine.Object.FindObjectsOfType<AudioListener>())
+                        if (l.isActiveAndEnabled) { _current = l; break; }
+                }
+                return _current != null && _current.isActiveAndEnabled ? _current : null;
+            }
+        }
+    }
+
     // RES's distance attenuation, evaluated ourselves (see AudioOutput for why).
     // Taken from one of RES's own engine AudioSources when it has made one, so a
     // custom rolloff curve carries over; otherwise from RES's settings.
@@ -203,6 +228,16 @@ namespace EngineSim
         private readonly AudioRolloffMode _mode;
         private readonly float _min, _max, _blend;
         private readonly AnimationCurve _custom;
+
+        // from another source's 3D settings (the game's own sound being replaced)
+        public Rolloff(AudioSource template)
+        {
+            _mode = template.rolloffMode;
+            _min = Mathf.Max(0.01f, template.minDistance);
+            _max = Mathf.Max(_min + 0.01f, template.maxDistance);
+            _blend = Mathf.Clamp01(template.spatialBlend);
+            if (_mode == AudioRolloffMode.Custom) _custom = template.GetCustomCurve(AudioSourceCurveType.CustomRolloff);
+        }
 
         public Rolloff(RealisticEngineSound res)
         {
@@ -215,8 +250,10 @@ namespace EngineSim
                 _custom = template.GetCustomCurve(AudioSourceCurveType.CustomRolloff);
         }
 
+        // the game's rolloff, scaled by [Audio] DistanceScale and blended in by DistanceAttenuation
         public float Gain(float distance)
         {
+            distance /= Plugin.DistanceScaleEntry.Value;
             float g;
             switch (_mode)
             {
@@ -230,7 +267,7 @@ namespace EngineSim
                 g = _min / Mathf.Clamp(distance, _min, _max);
                 break;
             }
-            return Mathf.Lerp(1f, g, _blend);
+            return Mathf.Lerp(1f, g, _blend * Plugin.DistanceAttenuationEntry.Value);
         }
     }
 }

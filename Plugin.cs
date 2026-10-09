@@ -23,7 +23,7 @@ namespace EngineSim
     {
         public const string GUID = "com.burner.apocalypter.enginesim";
         public const string NAME = "Engine Sim";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.1.0";
 
         public static ManualLogSource Log;
         public static ConfigEntry<bool> EnabledEntry;
@@ -31,10 +31,14 @@ namespace EngineSim
         public static ConfigEntry<SimQuality> QualityEntry;
         public static ConfigEntry<float> VolumeEntry;
         public static ConfigEntry<float> LatencyEntry;
+        public static ConfigEntry<float> DistanceAttenuationEntry, DistanceScaleEntry;
         public static ConfigEntry<float> WearIntensityEntry;
         public static ConfigEntry<float> IdleAirEntry;
         public static ConfigEntry<bool> VerboseLogEntry;
         public static ConfigEntry<string> BaseIrEntry;
+        public static ConfigEntry<bool> InductionEntry;
+        public static ConfigEntry<float> TurboVolumeEntry, TurboPitchLowEntry, TurboPitchHighEntry, TurboFullSpoolEntry, TurboSpinDownEntry;
+        public static ConfigEntry<float> SuperchargerVolumeEntry, SuperchargerPitchEntry;
         public static ConfigEntry<float> BaseFlowEntry, BasePipeEntry, BaseHeaderEntry, BaseLoudnessEntry, BaseNoiseEntry, BaseJitterEntry;
 
         // raised when a setting that shapes running engines changes: they are rebuilt
@@ -59,6 +63,12 @@ namespace EngineSim
                 "Applies to engines started after the change.");
             VolumeEntry = Config.Bind("Audio", "Volume", 0.8f,
                 new ConfigDescription("Loudness of the simulated engines.", new AcceptableValueRange<float>(0f, 2f)));
+            DistanceAttenuationEntry = Config.Bind("Audio", "DistanceAttenuation", 1f,
+                new ConfigDescription("How much the simulated engines and turbo / supercharger sounds fade with distance. " +
+                    "1 = the game's own rolloff, 0 = full volume at any distance.", new AcceptableValueRange<float>(0f, 1f)));
+            DistanceScaleEntry = Config.Bind("Audio", "DistanceScale", 1f,
+                new ConfigDescription("Scales the game's rolloff distances: above 1 the sounds carry further, below 1 they fade sooner.",
+                    new AcceptableValueRange<float>(0.25f, 4f)));
             LatencyEntry = Config.Bind("Audio", "Latency", 0.05f,
                 new ConfigDescription("How far (seconds) the simulation runs ahead of what you hear. " +
                     "Lower reacts faster to the throttle; too low and the sound breaks up.", new AcceptableValueRange<float>(0.02f, 0.2f)));
@@ -73,6 +83,10 @@ namespace EngineSim
             VerboseLogEntry = Config.Bind("Debug", "VerboseLog", false,
                 "Write extra diagnostic lines to BepInEx\\LogOutput.log.");
 
+            BindInduction();
+            var harmony = new Harmony(GUID);
+            harmony.PatchAll(typeof(InductionSound));   // works without the native library
+
             var dir = Path.GetDirectoryName(Info.Location);
             BindExhaustBase(Path.Combine(dir, "ir"));
             string error;
@@ -82,16 +96,46 @@ namespace EngineSim
                 return;
             }
             EngineManager.IrDirectory = Path.Combine(dir, "ir");
-            ExhaustProfiles.Init(Paths.ConfigPath);
+            PartTable.Init(Paths.ConfigPath);
 
-            new Harmony(GUID).PatchAll(typeof(Plugin).Assembly);
+            harmony.PatchAll(typeof(ResPatch));
 
             _runner = new GameObject("EngineSim Runner");
             _runner.hideFlags = HideFlags.HideAndDontSave;
             DontDestroyOnLoad(_runner);
             _runner.AddComponent<EngineManager>();
+            FsmDump.Init();
 
             Log.LogInfo(NAME + " " + VERSION + " loaded.");
+        }
+
+        // The game's own turbo / supercharger spool sound, re-proportioned (InductionSound).
+        private void BindInduction()
+        {
+            const string S = "Induction";
+            InductionEntry = Config.Bind(S, "ReplaceSpoolSound", true,
+                "Re-proportion the game's turbo spool and supercharger whine: a turbo spools with rpm and load, lags low " +
+                "in the revs and coasts down after a lift; a supercharger's whine follows the engine speed. The clips and " +
+                "the wastegate flutter stay the game's own. Off = stock (both top out at half the rev range).");
+            TurboVolumeEntry = Config.Bind(S, "TurboVolume", 0.5f,
+                new ConfigDescription("Loudness of the turbo spool fully spooled under load (the game's own is about 0.05, balanced " +
+                    "against its quieter stock engine sound).", new AcceptableValueRange<float>(0f, 1f)));
+            TurboPitchLowEntry = Config.Bind(S, "TurboPitchLow", 0.3f,
+                new ConfigDescription("Pitch of a size 1 turbo with the shaft barely turning (smaller turbos higher, larger lower).", new AcceptableValueRange<float>(0.1f, 1.5f)));
+            TurboPitchHighEntry = Config.Bind(S, "TurboPitchHigh", 0.8f,
+                new ConfigDescription("Pitch of a size 1 turbo fully spooled (smaller turbos higher, larger lower; stock reaches 1). The clips are high tones (~5 kHz at 1).", new AcceptableValueRange<float>(0.5f, 3f)));
+            TurboFullSpoolEntry = Config.Bind(S, "TurboFullSpoolRpm", 0.65f,
+                new ConfigDescription("Fraction of the rev limit at which a size 1 turbo spools fully with the throttle open; smaller turbos " +
+                    "sooner, larger later. Sizes per part are in EngineSim.induction.cfg.", new AcceptableValueRange<float>(0.3f, 1f)));
+            TurboSpinDownEntry = Config.Bind(S, "TurboSpinDown", 0.8f,
+                new ConfigDescription("Seconds the turbo takes to coast down after a lift (spool-up time is the game's).",
+                    new AcceptableValueRange<float>(0.1f, 3f)));
+            SuperchargerVolumeEntry = Config.Bind(S, "SuperchargerVolume", 0.5f,
+                new ConfigDescription("Loudness of the supercharger whine at the rev limit under load (the game's own is about 0.05).",
+                    new AcceptableValueRange<float>(0f, 1f)));
+            SuperchargerPitchEntry = Config.Bind(S, "SuperchargerPitch", 0.5f,
+                new ConfigDescription("Pitch of a size 1 supercharger's whine at the rev limit; it falls in proportion with the rpm, and is lower for a bigger blower.",
+                    new AcceptableValueRange<float>(0.5f, 3f)));
         }
 
         // The sound with no exhaust fitted; every exhaust in EngineSim.exhausts.cfg is relative to it.

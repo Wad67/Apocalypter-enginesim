@@ -13,7 +13,6 @@
 #include "synthesizer.h"
 #include "units.h"
 
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -248,56 +247,11 @@ static void pumpSynthesizer(Synthesizer &s) {
 
 extern "C" {
 
-ES_API int32_t es_parse_engine_name(const char *name, es_engine_desc *out) {
-    if (name == nullptr || out == nullptr) return 0;
-    es_engine_desc d;
-    memset(&d, 0, sizeof(d));
-    d.vAngleDeg = 90;
-    bool haveDisp = false, haveLayout = false;
+ES_API int32_t es_desc_size(void) { return (int32_t)sizeof(es_engine_desc); }
 
-    // tokens: "2.8L" / "594cc", "V6" / "I4" / "v2" / "B4" / "H4", "115HP", "183Nm", "Gasoline" / "Diesel"
-    std::string s(name);
-    size_t i = 0;
-    while (i < s.size()) {
-        while (i < s.size() && isspace((unsigned char)s[i])) ++i;
-        size_t j = i;
-        while (j < s.size() && !isspace((unsigned char)s[j])) ++j;
-        std::string tok = s.substr(i, j - i);
-        i = j;
-        if (tok.empty()) continue;
-
-        std::string lower;
-        for (char c : tok) lower += (char)tolower((unsigned char)c);
-        char *end = nullptr;
-        const double num = strtod(lower.c_str(), &end);
-        const std::string suffix = (end != nullptr) ? std::string(end) : "";
-
-        if (end != lower.c_str() && suffix == "l") { d.displacementL = (float)num; haveDisp = true; }
-        else if (end != lower.c_str() && suffix == "cc") { d.displacementL = (float)(num / 1000.0); haveDisp = true; }
-        else if (end != lower.c_str() && suffix == "hp") d.powerHp = (float)num;
-        else if (end != lower.c_str() && suffix == "nm") d.torqueNm = (float)num;
-        // the game appends instance numbers to part names ("Gasoline160")
-        else if (lower.rfind("diesel", 0) == 0) d.diesel = 1;
-        else if (lower.rfind("gasoline", 0) == 0 || lower.rfind("petrol", 0) == 0) d.diesel = 0;
-        else if (lower.size() >= 2 && strchr("ivbhw", lower[0]) != nullptr && isdigit((unsigned char)lower[1])) {
-            const int cyl = atoi(lower.c_str() + 1);
-            if (cyl < 1 || cyl > 16) continue;
-            d.cylinders = cyl;
-            d.layout = (lower[0] == 'i') ? ES_LAYOUT_INLINE
-                : (lower[0] == 'b' || lower[0] == 'h') ? ES_LAYOUT_BOXER
-                : ES_LAYOUT_V;
-            haveLayout = true;
-        }
-    }
-    if (!haveDisp || !haveLayout) return 0;
-
-    if (d.layout == ES_LAYOUT_V) {
-        d.vAngleDeg = (d.cylinders == 2) ? 45.0f : (d.cylinders == 6 ? 60.0f : (d.cylinders == 12 ? 60.0f : 90.0f));
-    }
-    d.redlineRpm = d.diesel ? 4000.0f : (d.cylinders <= 2 ? 6500.0f : 6000.0f);
-    d.idleRpm = d.diesel ? 750.0f : 850.0f;
-    *out = d;
-    return 1;
+ES_API int32_t es_default_params(int32_t cylinders, int32_t layout, float bankAngleDeg, float displacementL,
+    int32_t diesel, es_engine_params *out) {
+    return defaultParams(cylinders, layout, bankAngleDeg, displacementL, diesel, out) ? 1 : 0;
 }
 
 ES_API es_session *es_create(const es_engine_desc *desc, const char *irDirectory) {
