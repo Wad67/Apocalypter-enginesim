@@ -11,9 +11,12 @@ using UnityEngine.Audio;
 
 namespace EngineSim
 {
-    // Decides which engines are simulated: every running combustion engine with a
-    // RealisticEngineSound, nearest to the listener first, up to MaxEngines.
-    // The rest keep their stock sound. Lives on a hidden DontDestroyOnLoad runner
+    // Decides which engines are simulated: every combustion engine fitted to a vehicle (with a
+    // RealisticEngineSound and a listed engine part), running or not, up to MaxEngines: engines turning
+    // or with the key on first, then the nearest to the listener. The rest keep their stock sound.
+    // An engine with the key off is still simulated: turned by the starter, the wheels or a push it is
+    // heard turning over, just without ignition. The game's sound bridge (NWH2_RES2) switches the sound
+    // object off with the ignition; while simulated it stays on (ResActivePatch). Lives on a hidden DontDestroyOnLoad runner
     // (the game destroys plugin GameObjects on scene load).
     internal sealed class EngineManager : MonoBehaviour
     {
@@ -144,28 +147,35 @@ namespace EngineSim
             Vector3 ear = listener != null ? listener.transform.position : Vector3.zero;
             float now = Time.unscaledTime;
 
-            // candidates: running combustion engines within their sound's range
+            // candidates: combustion engines fitted to a live vehicle, within their sound's range. The sound
+            // object is inactive while the ignition is off, so inactive ones count too.
             var candidates = new List<KeyValuePair<RealisticEngineSound, float>>();
-            foreach (var res in UnityEngine.Object.FindObjectsOfType<RealisticEngineSound>())
+            var active = new HashSet<RealisticEngineSound>();
+            foreach (var res in Resources.FindObjectsOfTypeAll<RealisticEngineSound>())
             {
-                var vc = res.GetComponentInParent<VehicleController>();
-                if (vc == null || vc.powertrain == null || vc.powertrain.engine == null) continue;
+                if (res == null || !res.gameObject.scene.IsValid()) continue;   // prefab assets
+                var vc = VehicleOf(res.transform);
+                if (vc == null || !vc.isActiveAndEnabled || vc.powertrain == null || vc.powertrain.engine == null) continue;
                 var engine = vc.powertrain.engine;
                 if (engine.engineType != EngineComponent.EngineType.ICE) continue;
 
-                // with the simulated drivetrain an engine whose key is on is kept (not turning, or about to crank)
+                // turning, or the key on: first in line
                 if (engine.IsRunning || engine.starterActive || engine.OutputRPM > 50f
                     || (Plugin.SimDriveEntry.Value && DriveCoupling.KeyIsOn(vc))) _lastRunning[res] = now;
                 float last;
-                if (!_lastRunning.TryGetValue(res, out last) || now - last > KeepAliveSeconds) continue;
+                bool recent = _lastRunning.TryGetValue(res, out last) && now - last <= KeepAliveSeconds;
+                // otherwise any vehicle with an engine fitted (a listed one; an unlisted running one is reported by TryStart)
+                if (!recent && !_sessions.ContainsKey(res) && PartTable.Fitted(vc).EngineId == 0) continue;
 
                 float d = listener != null ? Vector3.Distance(ear, res.transform.position) : 0f;
                 if (d > res.maxDistance * 1.1f) continue;
                 candidates.Add(new KeyValuePair<RealisticEngineSound, float>(res, d));
+                if (recent) active.Add(res);
             }
 
             var wanted = new HashSet<RealisticEngineSound>(candidates
-                .OrderBy(c => c.Value)
+                .OrderBy(c => active.Contains(c.Key) ? 0 : 1)
+                .ThenBy(c => c.Value)
                 .Take(Plugin.MaxEnginesEntry.Value)
                 .Select(c => c.Key));
 
@@ -312,6 +322,17 @@ namespace EngineSim
             return Mathf.Clamp01(s.ConditionVar.Value / 100f);
         }
 
+        // GetComponentInParent skips inactive objects; the sound object is inactive with the ignition off
+        private static VehicleController VehicleOf(Transform t)
+        {
+            for (; t != null; t = t.parent)
+            {
+                var vc = t.GetComponent<VehicleController>();
+                if (vc != null) return vc;
+            }
+            return null;
+        }
+
         private static AudioListener FindListener()
         {
             foreach (var l in UnityEngine.Object.FindObjectsOfType<AudioListener>())
@@ -335,7 +356,14 @@ namespace EngineSim
             "very_highOff", "very_highOn", "aggressivnessOn", "aggressivnessOff", "valveShot"
         }.Select(n => AccessTools.FieldRefAccess<RealisticEngineSound, AudioSource>(n)).ToArray();
 
-        public static void Take(RealisticEngineSound res) { Taken.Add(res); SetMuted(res, true); }
+        public static void Take(RealisticEngineSound res)
+        {
+            Taken.Add(res);
+            SetMuted(res, true);
+            if (!res.gameObject.activeSelf) res.gameObject.SetActive(true);   // our audio lives under it
+        }
+
+        public static bool IsTaken(RealisticEngineSound res) { return Taken.Contains(res); }
 
         public static void Release(RealisticEngineSound res) { Taken.Remove(res); SetMuted(res, false); }
 
@@ -364,6 +392,39 @@ namespace EngineSim
                 var src = field(res);
                 if (src != null) src.mute = muted;
             }
+        }
+    }
+
+    // The game's sound bridge switches the engine sound object off whenever the ignition is off
+    // (!vc.powertrain.engine.ignition). Our audio plays from under it, so for an engine we simulate the
+    // bridge sees the ignition on for the length of its own Update (restored right after, nothing runs in
+    // between): an engine turned with the key off is heard, without switching the object off and on every
+    // frame. The sound component's own engine loops are muted by ResPatch either way.
+    [HarmonyPatch(typeof(NWH2_RES2), "Update")]
+    internal static class ResActivePatch
+    {
+        private static readonly AccessTools.FieldRef<NWH2_RES2, RealisticEngineSound> Res =
+            AccessTools.FieldRefAccess<NWH2_RES2, RealisticEngineSound>("res2");
+        private static readonly AccessTools.FieldRef<NWH2_RES2, VehicleController> Vc =
+            AccessTools.FieldRefAccess<NWH2_RES2, VehicleController>("vc");
+
+        private static void Prefix(NWH2_RES2 __instance, out EngineComponent __state)
+        {
+            __state = null;
+            var res = Res(__instance);
+            var vc = Vc(__instance);
+            if (res == null || vc == null || !ResPatch.IsTaken(res)) return;
+            var engine = vc.powertrain.engine;
+            if (engine.ignition) return;
+            engine.ignition = true;
+            __state = engine;
+        }
+
+        private static void Postfix(NWH2_RES2 __instance, EngineComponent __state)
+        {
+            if (__state != null) __state.ignition = false;
+            var res = Res(__instance);
+            if (res != null && !res.gameObject.activeSelf && ResPatch.IsTaken(res)) res.gameObject.SetActive(true);
         }
     }
 }

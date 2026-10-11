@@ -3,8 +3,9 @@
 A BepInEx 5 plugin for Apocalypter that replaces the game's recorded engine sounds with a live physical
 simulation from [engine-sim](https://github.com/ange-yaghi/engine-sim) by Ange Yaghi (AngeTheGreat).
 
-Every running engine near you is simulated: pistons, valves, combustion and exhaust gas flow, turned into
-sound as it happens. The simulated engine is built from the engine fitted to the car, so a 594cc twin, a
+Every engine fitted to a car near you is simulated, running or not: pistons, valves, combustion and
+exhaust gas flow, turned into sound as it happens. With the key off an engine still turns when something
+turns it (rolling in gear, a push, the starter) and is heard turning over, just without ignition. The simulated engine is built from the engine fitted to the car, so a 594cc twin, a
 2.8L V6 and a 7L V8 each sound like themselves.
 
 ## Features
@@ -66,6 +67,13 @@ simulated engines (`MaxEngines`, nearest first) are driven this way.
   to light some charges: a healthy engine catches in about a second and a half, a worn one takes several seconds,
   a finished one may not catch. Warmth is the game's oil temperature. The starter cranks at a realistic speed,
   dims the lights, and held against more than it can turn (in gear, clutch out) it gives up and only clicks.
+- **Clutch.** The clutch holds at least 2.5 times the engine's peak torque, whatever the game's condition-scaled
+  figure says. A vehicle that sets a stronger clutch of its own keeps it. In gear the engine turns on its own
+  inertia, loaded by the torque it passes through the clutch: held, its momentum goes into the drivetrain and a
+  heavy enough load (first gear against a stopped car, reverse at speed) pulls it down to a stall; slipping, it
+  is dragged by the clutch's friction torque, and its revs fall into the next gear on a shift. The game's model
+  barely moved the engine whatever it was coupled to, which only the tyres' grip on the road covered up; a wheel
+  off the ground spun up under an engine that never felt it.
 - **Fuel.** An empty tank starves the engine after the fuel left in the lines is used up.
 - **Forced induction as machines.** A supercharger is a blower on the crank: it moves a fixed volume per
   revolution and takes power to drive, so a big blower on a small engine makes boost and costs more than it gives.
@@ -103,7 +111,7 @@ BepInEx\plugins\EngineSim\
 | Section | Setting | Default | |
 |---|---|---|---|
 | General | `Enabled` | `true` | Off = the game's own engine sounds. |
-| Performance | `MaxEngines` | `2` | Engines simulated at once, nearest first. The rest keep the stock sound. |
+| Performance | `MaxEngines` | `2` | Engines simulated at once: turning or with the key on first, then the nearest. The rest keep the stock sound. |
 | Performance | `SimQuality` | `Balanced` | Gas-flow detail: `High` (engine-sim's own setting), `Balanced`, `Fast`. Lower it if the sound breaks up. |
 | Audio | `Volume` | `0.8` | |
 | Audio | `DistanceAttenuation` | `1` | How much engines and turbo / supercharger sounds fade with distance: 1 = the game's rolloff, 0 = none. |

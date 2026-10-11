@@ -59,7 +59,7 @@ namespace EngineSim
             // opt in to the Apocasetter Mods window (the entry itself is hidden there)
             Config.Bind("General", "Apocasetter", true, "Show in the Apocasetter Mods menu.");
             EnabledEntry = Config.Bind("General", "Enabled", true, "Replace the stock engine sound.");
-            MaxEnginesEntry = Config.Bind("Performance", "MaxEngines", 2, new ConfigDescription("Engines simulated at once, nearest first. Each uses most of a CPU core.", new AcceptableValueRange<int>(1, 8)));
+            MaxEnginesEntry = Config.Bind("Performance", "MaxEngines", 2, new ConfigDescription("Engines simulated at once, turning ones first, then the nearest. Each uses most of a CPU core.", new AcceptableValueRange<int>(1, 8)));
             QualityEntry = Config.Bind("Performance", "SimQuality", SimQuality.Balanced, "Gas-flow detail. Lower costs less CPU. Applies to engines started after the change.");
             VolumeEntry = Config.Bind("Audio", "Volume", 0.8f, new ConfigDescription("Engine loudness.", new AcceptableValueRange<float>(0f, 2f)));
             DistanceAttenuationEntry = Config.Bind("Audio", "DistanceAttenuation", 1f, new ConfigDescription("Fade with distance. 1 = game's rolloff, 0 = none.", new AcceptableValueRange<float>(0f, 1f)));
@@ -97,6 +97,8 @@ namespace EngineSim
             PartTable.Init(Paths.ConfigPath);
 
             harmony.PatchAll(typeof(ResPatch));
+            harmony.PatchAll(typeof(ResActivePatch));
+            harmony.PatchAll(typeof(DrivelinePatch));
             harmony.PatchAll(typeof(StartStopPatch));
             harmony.PatchAll(typeof(StopPatch));
             harmony.PatchAll(typeof(StartPatch));

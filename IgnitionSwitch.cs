@@ -11,8 +11,9 @@ namespace EngineSim
     // The game's own switch (PlayMaker FSM 'Start' on the vehicle's START object) runs a fixed-time
     // start and follows the game's engine (IsRunning, its fuel and engine checks); while coupled it is
     // disabled, and its parts are used as they are: the key it turns, its sounds (the click of the
-    // ignition and the starter loop) and the hover text. Released, the FSM is put back in the state
-    // matching the key.
+    // ignition and the starter loop), the hover text, and what it tells the rest of the vehicle when the
+    // key turns (the dashboard's gauges: Activate / Deactivate). Released, the FSM is put back in the
+    // state matching the key.
     internal sealed class IgnitionSwitch
     {
         private const string FsmName = "Start";
@@ -120,7 +121,24 @@ namespace EngineSim
         {
             On = on;
             if (_toggleClip != null) AudioSource.PlayClipAtPoint(_toggleClip, _owner.transform.position, 1f);
+            Announce(on ? StateIgnition : StateOff);
             Plugin.Verbose("ignition " + (on ? "on" : "off"));
+        }
+
+        // The events the game's switch sends as the key turns (to the dashboard: its gauges come on and go off
+        // with the key), with the lookups in that state that find their targets, run as the switch would.
+        private static readonly string[] AnnounceActions = { "GetParent", "GetOwner", "GetChild", "GetFsmGameObject", "SendEvent" };
+
+        private void Announce(string state)
+        {
+            var s = _fsm.Fsm.States.FirstOrDefault(x => x.Name == state);
+            if (s == null) return;
+            foreach (var a in s.Actions)
+            {
+                if (a == null || !a.Enabled || !AnnounceActions.Contains(a.GetType().Name)) continue;
+                try { a.OnEnter(); }
+                catch (System.Exception e) { Plugin.Verbose("ignition: " + state + "/" + a.GetType().Name + ": " + e.Message); }
+            }
         }
 
         private void ShowKey()

@@ -60,6 +60,9 @@ namespace EngineSim
 
         public bool KeyOn { get { return _key && !_partGone; } }
 
+        // the torque the engine made in the last physics step (for ClutchSlipPatch)
+        internal float LastTorque;
+
         // the session of a coupled engine, or null
         internal static EngineSession SessionOf(EngineComponent engine)
         {
@@ -106,15 +109,39 @@ namespace EngineSim
             _engine.autoStartOnThrottle = false;
             _engine.calculateTorqueDelegate = _ours;
             _engine.ignition = _key;
+            WheelInertias(vc);
             Plugin.Verbose(session.PartName + ": coupled, key " + (_key ? "on" : "off") + (_switch == null ? ", no ignition switch" : ""));
+        }
+
+        // The powertrain takes each wheel's inertia once as the vehicle starts up, and a wheel only works its
+        // inertia out from its mass and radius on its first physics step: a wheel set up without a stored
+        // inertia (a vehicle built at runtime) is driven as if it weighed nothing, spun up instantly by an
+        // engine that never feels it. Those get their real one, half m r squared.
+        private static readonly HarmonyLib.AccessTools.FieldRef<WheelComponent, float> InitialWheelInertia =
+            HarmonyLib.AccessTools.FieldRefAccess<WheelComponent, float>("_initialWheelInertia");
+
+        private void WheelInertias(VehicleController vc)
+        {
+            foreach (var wheel in vc.powertrain.wheels)
+            {
+                var u = wheel != null ? wheel.wheelUAPI : null;
+                if (u == null || InitialWheelInertia(wheel) > 1e-3f) continue;
+                float inertia = 0.5f * u.Mass * u.Radius * u.Radius;
+                if (inertia <= 1e-3f) continue;
+                InitialWheelInertia(wheel) = inertia;
+                Plugin.Verbose(_session.PartName + ": wheel " + wheel.name + " had no inertia; " + inertia.ToString("0.###") + " kg m2 from its mass and radius");
+            }
         }
 
         // the game's engine asks for its torque every physics step
         private float Torque(float angularVelocity, float dt)
         {
-            if (_partGone) return 0f;   // no engine
-            if (!_session.DriveReady) return _vanilla(angularVelocity, dt);   // the simulation still starting up
-            return _session.DriveTorque;
+            float torque;
+            if (_partGone) torque = 0f;   // no engine
+            else if (!_session.DriveReady) torque = _vanilla(angularVelocity, dt);   // the simulation still starting up
+            else torque = _session.DriveTorque;
+            LastTorque = torque;
+            return torque;
         }
 
         private bool EngineFitted()
@@ -142,9 +169,10 @@ namespace EngineSim
             }
 
             // The clutch is sized for the engine, not for the game's power figure (which falls with
-            // condition, down to a clutch that transmits a few N m); kept even if the game resets it.
+            // condition, down to a clutch that transmits a few N m): at least that, even if the game
+            // lowers it again. A vehicle that sets a stronger clutch of its own keeps it.
             var clutchPart = _session.Vc.powertrain.clutch;
-            if (_session.ClutchTorque > 0f && clutchPart.slipTorque != _session.ClutchTorque) clutchPart.slipTorque = _session.ClutchTorque;
+            if (_session.ClutchTorque > 0f && clutchPart.slipTorque < _session.ClutchTorque) clutchPart.slipTorque = _session.ClutchTorque;
             if (!_inertiaSet && _session.CrankInertia > 0f)
             {
                 _engine.inertia = _session.CrankInertia;
@@ -412,6 +440,46 @@ namespace EngineSim
             }
             if (h.Empty && __instance.ignition) __instance.StopEngine();
             return !h.Empty;
+        }
+    }
+
+    // The engine's speed while coupled, in gear. The game's engine step pulls the engine towards the
+    // drivetrain's speed with a correcting torque and hands that torque to the clutch, but then moves the
+    // engine by only its share of the whole drivetrain's inertia: the engine hardly slows whatever it is
+    // coupled to, and the drivetrain is fed the correction step after step until it has caught up. On the
+    // road the tyres' reaction hides this; a wheel off the ground (a dyno flywheel, a car on its roof)
+    // just spins up under an engine that never feels it, and a slipping clutch never drags it down.
+    // Here the engine turns on its own inertia, driven by its torque and loaded by what it handed to the
+    // clutch, which is exactly what the clutch passed on to the gearbox and wheels: held, the engine's
+    // momentum goes into the drivetrain and the two settle at one speed (a big enough load stalls it);
+    // slipping, the engine is dragged by the friction torque alone. In neutral nothing behind the
+    // clutch takes the torque, and the game's step (engine and input shaft as one) is kept.
+    [HarmonyLib.HarmonyPatch(typeof(EngineComponent), nameof(EngineComponent.IntegrateDownwards))]
+    internal static class DrivelinePatch
+    {
+        private static readonly HarmonyLib.AccessTools.FieldRef<EngineComponent, float> RpmPercent =
+            HarmonyLib.AccessTools.FieldRefAccess<EngineComponent, float>("_rpmPercent");
+
+        private static void Prefix(EngineComponent __instance, out float __state)
+        {
+            __state = __instance.outputAngularVelocity;
+        }
+
+        private static void Postfix(EngineComponent __instance, float dt, float __state)
+        {
+            DriveCoupling coupling;
+            if (dt <= 0f || !DriveCoupling.Active.TryGetValue(__instance, out coupling) || coupling.PartGone) return;
+            var vc = __instance.vehicleController;
+            if (vc == null) return;
+            var clutch = vc.powertrain.clutch;
+            var gearbox = vc.powertrain.transmission;
+            if (clutch == null || gearbox == null || !ReferenceEquals(__instance.Output, clutch)) return;
+            if (gearbox.Gear == 0 || !ReferenceEquals(clutch.Output, gearbox)) return;
+            float inertia = Mathf.Max(1e-4f, __instance.inertia);
+            float w = __state + (coupling.LastTorque - clutch.outputTorque) / inertia * dt;
+            float limit = __instance.revLimiterRPM * (Mathf.PI / 30f);
+            __instance.outputAngularVelocity = Mathf.Clamp(w, 0f, limit * 1.05f);
+            RpmPercent(__instance) = Mathf.Clamp01(__instance.outputAngularVelocity / limit);
         }
     }
 }
