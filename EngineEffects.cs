@@ -56,12 +56,23 @@ namespace EngineSim
             _exhaust = new ExhaustFx(session);
         }
 
+        // The game's exhaust flash goes through its meshes and lights without looking: they belong to the exhaust
+        // part, so with it taken off they are gone and the flash throws. Without them (or textures) there is no
+        // tailpipe to flash from anyway.
+        private bool FlashUsable()
+        {
+            if (_flash == null || _flash.flashTextures == null || _flash.flashTextures.Count == 0) return false;
+            if (_flash.meshRenderers != null) foreach (var r in _flash.meshRenderers) if (r == null) return false;
+            if (_flash.flashLights != null) foreach (var l in _flash.flashLights) if (l == null) return false;
+            return true;
+        }
+
         public void Update()
         {
             // smoke and backfires at the exhaust part; without one, backfires only flash the game's exhaust flash
             int backfires = _session.TakeBackfires();
             if (_exhaust.Active) _exhaust.Update(backfires);
-            else if (backfires > 0 && _flash != null && Plugin.BackfireEntry.Value > 0f) _flash.Flash(false);
+            else if (backfires > 0 && Plugin.BackfireEntry.Value > 0f && FlashUsable()) _flash.Flash(false);
 
             float strength = Plugin.EngineRockEntry.Value;
             if (strength <= 0f || _session.EnginePart == null)

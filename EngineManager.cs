@@ -66,13 +66,18 @@ namespace EngineSim
             var ear = _listener != null ? _listener.transform : null;
             foreach (var kv in _sessions)
             {
-                DriveCoupling coupling;
-                _couplings.TryGetValue(kv.Key, out coupling);
-                Feed(kv.Value, coupling);
-                kv.Value.UpdateDistance(ear);
-                if (coupling != null) coupling.Update();
-                EngineEffects fx;
-                if (_effects.TryGetValue(kv.Key, out fx)) fx.Update();
+                // one engine whose vehicle went away mid-frame mustn't stop the others (the scan ends it)
+                try
+                {
+                    DriveCoupling coupling;
+                    _couplings.TryGetValue(kv.Key, out coupling);
+                    Feed(kv.Value, coupling);
+                    kv.Value.UpdateDistance(ear);
+                    if (coupling != null) coupling.Update();
+                    EngineEffects fx;
+                    if (_effects.TryGetValue(kv.Key, out fx)) fx.Update();
+                }
+                catch (Exception e) { Plugin.Verbose(kv.Value.PartName + ": " + e.Message); }
             }
 
             if (Plugin.VerboseLogEntry.Value && Time.unscaledTime >= _nextStats && _sessions.Count > 0)

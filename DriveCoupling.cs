@@ -147,8 +147,9 @@ namespace EngineSim
         private bool EngineFitted()
         {
             var part = _session.EnginePart;
-            return part != null && part.activeInHierarchy && part.GetComponent<Rigidbody>() == null
-                && part.transform.IsChildOf(_session.Vc.transform);
+            var vc = _session.Vc;   // gone with its vehicle (destroyed, despawned, swapped by a hot reload)
+            return part != null && vc != null && part.activeInHierarchy && part.GetComponent<Rigidbody>() == null
+                && part.transform.IsChildOf(vc.transform);
         }
 
         // main thread, every frame

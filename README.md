@@ -86,6 +86,30 @@ simulated engines (`MaxEngines`, nearest first) are driven this way.
 - With `Match game power` (on), each engine's torque is scaled to the game's rated power (`drive_torque_scale`
   in `EngineSim.engines.cfg`).
 
+## Parts for building vehicles
+
+Components a vehicle can carry (added by a vehicle mod, e.g. from a SigmaMod `.json`). They work with or
+without the simulated drivetrain.
+
+- `EngineSim.WheelCoupling`: two wheels turned together outside the game's drivetrain, which only knows a
+  tree from the gearbox down to the wheels. A belt from a flywheel to another axle, or a solid axle. Fields:
+  `a`, `b` (WheelControllers; b turns `ratio` times as fast as a), `capacity` (most torque passed, N m at
+  b; 0 = rigid) and `engagement` (0..1). It works through the wheels' torque, as the game's drivetrain does:
+  a wheel on the ground drives the car and the road loads the coupling.
+- `EngineSim.Belt`: draws a belt round two pulleys (`a`, `b`, `radiusA`, `radiusB`, `width`, `thickness`):
+  straight along the outer tangents and wrapped round each. It moves with the driving pulley's rim when its
+  `coupling` is engaged and hangs slack (`sag`) when not. Without a `material` it is black rubber with a
+  moulded cross rib every `pitch` m (a cogged belt), so it can be seen running and slipping. `replaces`
+  hides placeholder meshes.
+- `EngineSim.Windage`: air drag on a spinning wheel or flywheel, a disc of the wheel's radius and width
+  (both faces and the rim), added to its rolling resistance. A 1 m flywheel at 1000 rpm loses about 70 N m.
+- `EngineSim.RimFriction`: the game's wheels collide through frictionless meshes and only grip through
+  the tyre model, which only sees the ground below the wheel as the vehicle stands. On its side or roof a
+  vehicle resting on a wheel or flywheel would skate forever. With this next to a WheelController, its
+  meshes take `friction` (0.5, steel on dirt) whenever the tyre model isn't gripping.
+- Wheels without suspension travel (`spring.maxLength` 0, a solid axle): when a bigger wheel goes on, the
+  vehicle is lifted by as much as the wheel would sink into the ground, instead of burying it.
+
 ## Requirements
 
 - Apocalypter with [BepInEx 5](https://github.com/BepInEx/BepInEx/releases) (x64).
