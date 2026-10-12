@@ -455,6 +455,18 @@ namespace EngineSim
     // momentum goes into the drivetrain and the two settle at one speed (a big enough load stalls it);
     // slipping, the engine is dragged by the friction torque alone. In neutral nothing behind the
     // clutch takes the torque, and the game's step (engine and input shaft as one) is kept.
+    // The torque the game's engine model gives each step (CalculateTorqueICE: power curve, losses and starter),
+    // for loads on the crank of an engine the simulation doesn't drive.
+    [HarmonyLib.HarmonyPatch(typeof(EngineComponent), nameof(EngineComponent.CalculateTorqueICE))]
+    internal static class GameTorque
+    {
+        private static readonly Dictionary<EngineComponent, float> Last = new Dictionary<EngineComponent, float>();
+
+        public static float Get(EngineComponent e) => e != null && Last.TryGetValue(e, out float t) ? t : 0f;
+
+        private static void Postfix(EngineComponent __instance, float __result) => Last[__instance] = __result;
+    }
+
     [HarmonyLib.HarmonyPatch(typeof(EngineComponent), nameof(EngineComponent.IntegrateDownwards))]
     internal static class DrivelinePatch
     {
@@ -480,9 +492,9 @@ namespace EngineSim
             float limit = __instance.revLimiterRPM * (Mathf.PI / 30f);
             float w;
             // loads on the crank (Shaft): the engine's torque is the simulation's, or, for an engine it doesn't
-            // drive, what the game's model made (its power at the speed it had)
-            float engineTorque = coupled ? coupling.LastTorque
-                : __state > 1f ? __instance.generatedPower * 1000f / __state : 0f;
+            // drive, the game's model's (its torque function's result this step, starter included; its power
+            // reading is that torque times the speed, so it says nothing at a standstill)
+            float engineTorque = coupled ? coupling.LastTorque : GameTorque.Get(__instance);
             if (Shaft.Step(vc, __state, engineTorque, inGear ? clutch.outputTorque : 0f, __instance.inertia, dt, out w))
             {
                 __instance.outputAngularVelocity = Mathf.Clamp(w, 0f, limit * 1.05f);
