@@ -468,17 +468,30 @@ namespace EngineSim
 
         private static void Postfix(EngineComponent __instance, float dt, float __state)
         {
-            DriveCoupling coupling;
-            if (dt <= 0f || !DriveCoupling.Active.TryGetValue(__instance, out coupling) || coupling.PartGone) return;
+            if (dt <= 0f) return;
             var vc = __instance.vehicleController;
             if (vc == null) return;
+            DriveCoupling coupling;
+            bool coupled = DriveCoupling.Active.TryGetValue(__instance, out coupling) && !coupling.PartGone;
             var clutch = vc.powertrain.clutch;
             var gearbox = vc.powertrain.transmission;
-            if (clutch == null || gearbox == null || !ReferenceEquals(__instance.Output, clutch)) return;
-            if (gearbox.Gear == 0 || !ReferenceEquals(clutch.Output, gearbox)) return;
-            float inertia = Mathf.Max(1e-4f, __instance.inertia);
-            float w = __state + (coupling.LastTorque - clutch.outputTorque) / inertia * dt;
+            bool inGear = clutch != null && gearbox != null && ReferenceEquals(__instance.Output, clutch)
+                          && gearbox.Gear != 0 && ReferenceEquals(clutch.Output, gearbox);
             float limit = __instance.revLimiterRPM * (Mathf.PI / 30f);
+            float w;
+            // loads on the crank (Shaft): the engine's torque is the simulation's, or, for an engine it doesn't
+            // drive, what the game's model made (its power at the speed it had)
+            float engineTorque = coupled ? coupling.LastTorque
+                : __state > 1f ? __instance.generatedPower * 1000f / __state : 0f;
+            if (Shaft.Step(vc, __state, engineTorque, inGear ? clutch.outputTorque : 0f, __instance.inertia, dt, out w))
+            {
+                __instance.outputAngularVelocity = Mathf.Clamp(w, 0f, limit * 1.05f);
+                RpmPercent(__instance) = Mathf.Clamp01(__instance.outputAngularVelocity / limit);
+                return;
+            }
+            if (!coupled || !inGear) return;
+            float inertia = Mathf.Max(1e-4f, __instance.inertia);
+            w = __state + (coupling.LastTorque - clutch.outputTorque) / inertia * dt;
             __instance.outputAngularVelocity = Mathf.Clamp(w, 0f, limit * 1.05f);
             RpmPercent(__instance) = Mathf.Clamp01(__instance.outputAngularVelocity / limit);
         }

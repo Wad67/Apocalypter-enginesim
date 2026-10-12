@@ -110,6 +110,20 @@ without the simulated drivetrain.
 - Wheels without suspension travel (`spring.maxLength` 0, a solid axle): when a bigger wheel goes on, the
   vehicle is lifted by as much as the wheel would sink into the ground, instead of burying it.
 
+### Loads on the crankshaft (for other mods)
+
+Something the engine turns that isn't the game's drivetrain (a propeller, a pump, a pre-rotator) implements
+`EngineSim.IShaftLoad` and is attached with `EngineSim.Shaft.Attach(vehicleController, load)`:
+
+- `Inertia`: kg m2 as seen at the crank (a load behind a reduction of ratio r counts r^2 times its own).
+- `Torque(w, dt, out slope)`: the torque it takes at crank speed `w` (rad/s) over the next step, and its slope
+  dTorque/dw. Negative torque drives the engine (a windmilling propeller).
+
+With any load attached, every engine step turns the crank on the engine's inertia plus the loads', driven by the
+engine's torque and held back by the loads and, in gear, by what goes to the clutch; in neutral the loads are all
+that hold it. Each load is taken semi-implicitly through its slope, so a stiff one can't make the step overshoot.
+It works with or without the simulated drivetrain. Apoc-Air's propellers use it.
+
 ## Requirements
 
 - Apocalypter with [BepInEx 5](https://github.com/BepInEx/BepInEx/releases) (x64).
