@@ -23,7 +23,7 @@ namespace EngineSim
     {
         public const string GUID = "com.burner.apocalypter.enginesim";
         public const string NAME = "Engine Sim";
-        public const string VERSION = "1.3.0";
+        public const string VERSION = "1.4.0";
 
         public static ManualLogSource Log;
         public static ConfigEntry<bool> EnabledEntry;

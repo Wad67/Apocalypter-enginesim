@@ -71,6 +71,10 @@ namespace EngineSim
         {
             // smoke and backfires at the exhaust part; without one, backfires only flash the game's exhaust flash
             int backfires = _session.TakeBackfires();
+            if (backfires > 0)
+                Plugin.Verbose("[backfire] " + _session.PartName + ": " + backfires + " detected, " + (Plugin.BackfireEntry.Value > 0f ? "played" : "silenced")
+                    + " (Backfires " + Plugin.BackfireEntry.Value.ToString("0.###") + ", BackfireChance " + Plugin.BackfireChanceEntry.Value.ToString("0.###")
+                    + (_exhaust.Active ? ", at the exhaust)" : ", no exhaust: flash only)"));
             if (_exhaust.Active) _exhaust.Update(backfires);
             else if (backfires > 0 && Plugin.BackfireEntry.Value > 0f && FlashUsable()) _flash.Flash(false);
 

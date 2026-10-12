@@ -164,8 +164,46 @@ default              = -, 0.95, 0.25, 1.0, 0.85
         private static Dictionary<long, EngineSpec> _engines = new Dictionary<long, EngineSpec>();
         private static Dictionary<string, ExhaustProfile> _exhausts = new Dictionary<string, ExhaustProfile>();
 
+        // Tables other mods ship: every plugin folder's 'enginesim_assets' folder, any depth, files named
+        // *.engines.cfg, *.exhausts.cfg and *.induction.cfg in the same formats as the tables in BepInEx/config.
+        // They are read over the tables in BepInEx/config, so a mod can add its own parts and retune the
+        // game's; two mods setting the same part: the later folder (by name) wins, and it is logged. A mod
+        // ships its lines here instead of editing the tables in BepInEx/config.
+        public const string ModFolder = "enginesim_assets";
+        private static readonly List<TableFile> ModEngines = new List<TableFile>(), ModExhausts = new List<TableFile>(), ModInduction = new List<TableFile>();
+
+        private static void FindModTables(string pluginsDir)
+        {
+            ModEngines.Clear(); ModExhausts.Clear(); ModInduction.Clear();
+            if (!Directory.Exists(pluginsDir)) return;
+            foreach (var mod in Directory.GetDirectories(pluginsDir))
+            {
+                var dir = Path.Combine(mod, ModFolder);
+                if (!Directory.Exists(dir)) continue;
+                string[] files;
+                try { files = Directory.GetFiles(dir, "*.cfg", SearchOption.AllDirectories); }
+                catch (Exception e) { Plugin.Log.LogWarning(dir + ": " + e.Message); continue; }
+                foreach (var f in files.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                {
+                    var n = Path.GetFileName(f).ToLowerInvariant();
+                    var list = n.EndsWith(".engines.cfg") ? ModEngines : n.EndsWith(".exhausts.cfg") ? ModExhausts : n.EndsWith(".induction.cfg") ? ModInduction : null;
+                    if (list == null) { Plugin.Log.LogWarning(f + ": not *.engines.cfg, *.exhausts.cfg or *.induction.cfg; ignored"); continue; }
+                    list.Add(new TableFile { Path = f });
+                    Plugin.Log.LogInfo("tables from " + Path.GetFileName(mod) + ": " + Path.GetFileName(f));
+                }
+            }
+        }
+
+        private static string ModName(string path)
+        {
+            var dir = Path.GetDirectoryName(path);
+            while (dir != null && !string.Equals(Path.GetFileName(dir), ModFolder, StringComparison.OrdinalIgnoreCase)) dir = Path.GetDirectoryName(dir);
+            return dir != null ? Path.GetFileName(Path.GetDirectoryName(dir)) : Path.GetFileName(path);
+        }
+
         public static void Init(string configDir)
         {
+            FindModTables(BepInEx.Paths.PluginPath);
             EnginesFile.Path = Path.Combine(configDir, "EngineSim.engines.cfg");
             ExhaustsFile.Path = Path.Combine(configDir, "EngineSim.exhausts.cfg");
             InductionFile.Path = Path.Combine(configDir, "EngineSim.induction.cfg");
@@ -193,13 +231,53 @@ default              = -, 0.95, 0.25, 1.0, 0.85
         // re-read when a file was edited, so changes apply to the next engine that starts
         private static void Reload(bool force)
         {
-            if (force || Changed(EnginesFile))
+            if (force || Changed(EnginesFile) || ModEngines.Any(Changed))
             {
                 EnginesFile.Stamp = File.GetLastWriteTimeUtc(EnginesFile.Path);
-                _engines = EngineConfig.Load(EnginesFile.Path);
+                var table = EngineConfig.Load(EnginesFile.Path);
+                var byMod = new Dictionary<long, string>();
+                foreach (var f in ModEngines)
+                {
+                    f.Stamp = File.GetLastWriteTimeUtc(f.Path);
+                    foreach (var kv in EngineConfig.Load(f.Path))
+                    {
+                        string earlier;
+                        if (byMod.TryGetValue(kv.Key, out earlier)) Plugin.Log.LogWarning("engine " + kv.Key + ": " + ModName(f.Path) + " replaces " + earlier + "'s line");
+                        else if (table.ContainsKey(kv.Key)) Plugin.Verbose("engine " + kv.Key + ": " + ModName(f.Path) + " retunes it");
+                        byMod[kv.Key] = ModName(f.Path);
+                        table[kv.Key] = kv.Value;
+                    }
+                }
+                _engines = table;
             }
-            if (force || Changed(ExhaustsFile)) _exhausts = LoadExhausts();
-            if (force || Changed(InductionFile)) _induction = LoadInduction();
+            if (force || Changed(ExhaustsFile) || ModExhausts.Any(Changed))
+            {
+                var table = LoadExhausts(ExhaustsFile);
+                var byMod = new Dictionary<string, string>();
+                foreach (var f in ModExhausts) Merge(table, byMod, LoadExhausts(f), f.Path);
+                _exhausts = table;
+            }
+            if (force || Changed(InductionFile) || ModInduction.Any(Changed))
+            {
+                var table = LoadInduction(InductionFile);
+                var byMod = new Dictionary<string, string>();
+                foreach (var f in ModInduction) Merge(table, byMod, LoadInduction(f), f.Path);
+                _induction = table;
+            }
+        }
+
+        // a mod's lines over the table so far; two mods on one part is worth a warning
+        private static void Merge<T>(Dictionary<string, T> into, Dictionary<string, string> byMod, Dictionary<string, T> from, string path)
+        {
+            var mod = ModName(path);
+            foreach (var kv in from)
+            {
+                string earlier;
+                if (byMod.TryGetValue(kv.Key, out earlier)) Plugin.Log.LogWarning(kv.Key + ": " + mod + " replaces " + earlier + "'s line");
+                else if (into.ContainsKey(kv.Key)) Plugin.Verbose(kv.Key + ": " + mod + " retunes it");
+                byMod[kv.Key] = mod;
+                into[kv.Key] = kv.Value;
+            }
         }
 
         private static bool Changed(TableFile f)
@@ -207,11 +285,11 @@ default              = -, 0.95, 0.25, 1.0, 0.85
             return File.Exists(f.Path) && File.GetLastWriteTimeUtc(f.Path) != f.Stamp;
         }
 
-        private static Dictionary<string, ExhaustProfile> LoadExhausts()
+        private static Dictionary<string, ExhaustProfile> LoadExhausts(TableFile file)
         {
             var table = new Dictionary<string, ExhaustProfile>();
-            ExhaustsFile.Stamp = File.GetLastWriteTimeUtc(ExhaustsFile.Path);
-            foreach (var row in Rows(ExhaustsFile.Path))
+            file.Stamp = File.GetLastWriteTimeUtc(file.Path);
+            foreach (var row in Rows(file.Path))
             {
                 try
                 {
@@ -235,16 +313,16 @@ default              = -, 0.95, 0.25, 1.0, 0.85
                         Jitter = f.Length > 6 ? Num(f[6]) : 0f,
                     };
                 }
-                catch (Exception e) { row.Warn(ExhaustsFile.Path, e); }
+                catch (Exception e) { row.Warn(file.Path, e); }
             }
             return table;
         }
 
-        private static Dictionary<string, InductionPart> LoadInduction()
+        private static Dictionary<string, InductionPart> LoadInduction(TableFile file)
         {
             var table = new Dictionary<string, InductionPart>();
-            InductionFile.Stamp = File.GetLastWriteTimeUtc(InductionFile.Path);
-            foreach (var row in Rows(InductionFile.Path))
+            file.Stamp = File.GetLastWriteTimeUtc(file.Path);
+            foreach (var row in Rows(file.Path))
             {
                 try
                 {
@@ -262,7 +340,7 @@ default              = -, 0.95, 0.25, 1.0, 0.85
                     if (sizes.Any(x => x < 0.2f || x > 3f)) throw new FormatException("sizes are 0.2 - 3");
                     table[key] = new InductionPart { Psi = psi, Sizes = sizes };
                 }
-                catch (Exception e) { row.Warn(InductionFile.Path, e); }
+                catch (Exception e) { row.Warn(file.Path, e); }
             }
             return table;
         }

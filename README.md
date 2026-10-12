@@ -167,6 +167,15 @@ BepInEx\plugins\EngineSim\
 The exhaust ranges are the limits of engine-sim's exhaust model: outside them it oscillates (a metallic squeal
 at idle) or rasps.
 
+### Tables from other mods
+
+A mod that adds or retunes parts ships its own lines instead of editing the tables in `BepInEx/config`: any
+plugin folder's `enginesim_assets` folder (any depth), in files named `*.engines.cfg`, `*.exhausts.cfg` and
+`*.induction.cfg`, in the same formats as the tables below. They are read on top of the tables in
+`BepInEx/config`, so a mod can add its own engines and retune the game's. Where two mods set the same part, the
+later folder (by name) wins and the log says so. Edits to them apply to the next engine that starts, like edits
+to the main tables. Exhaust profiles name impulse responses in `EngineSim/ir`.
+
 ### Engine and exhaust tables
 
 Parts are identified by their prefab's Easy Save id (`ES3Prefab.prefabId`), a number the game stores with every
