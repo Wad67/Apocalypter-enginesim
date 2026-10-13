@@ -29,9 +29,19 @@ namespace EngineSim
     // of a fixed budget, so an emitter never runs into its particle limit (which stops it emitting
     // until old smoke dies) and the cost stays bounded however dirty the engine.
     //
-    // Backfires (detected by the simulation) come out of the same emitters: a small burst of flame-lit
-    // and dark smoke, a dim orange flicker at the outlet, and a report at the exhaust: one of the game's
-    // gunshot sounds, a little lower, all outside the engine's sound.
+    // Lighting: a smoke particle is a flat card turned to the camera, and the game's smoke material lights it as a
+    // flat surface, so the same smoke is fullbright with the sun behind the camera and dull from the other side.
+    // Smoke is a cloud that scatters light about the same whichever way it is seen, so it is drawn unlit, with
+    // the scene's light worked into its colour: the ambient light plus the sun's share, from how high the sun is
+    // (none at night). If the game has no unlit particle shader, its own material is kept and the particles get
+    // spherical normals instead (each lit as a ball, not a card).
+    //
+    // Backfires (detected by the simulation) come out of each outlet: unburnt fuel lighting in the pipe throws a
+    // short jet of flame (ExhaustFire: the game's own fire) and a slug of dark, fuel-rich smoke that leaves fast,
+    // slows in the air and billows into a cloud bigger than the running smoke; an oily engine's also spits burning
+    // drops of oil. A brief orange flash at the outlet, and a report at the exhaust: one of the game's gunshot
+    // sounds, a little lower, all outside the engine's sound. An engine burning a lot of oil, worked hard, blows
+    // burning drops out of the pipe as it runs, too.
     internal sealed class ExhaustFx
     {
         private const string SmokeFsm = "ExhaustSmoke";
@@ -43,6 +53,12 @@ namespace EngineSim
         private static readonly string[] Gunshots = { "gunshot_1", "gunshot_3", "gunshot_6", "gunshot_7" };
         private static Dictionary<string, AudioClip> _gameClips;
         private static AudioClip _generatedBang;
+        private static Shader _fadeShader, _addShader;
+        private static bool _shadersLooked;
+        private static int _lightFrame = -1;
+        private static Color _light = Color.white;
+        private static Light _sun;
+        private static float _sunLooked = -100f;
 
         private sealed class Emitter
         {
@@ -58,6 +74,11 @@ namespace EngineSim
             public ParticleSystem.MinMaxCurve Size, Speed, Lifetime, SizeOverLife;
             public ParticleSystem.MinMaxGradient Color;
             public float GrowFrom;    // the emitter's own growth at birth, relative to its end
+            public ParticleSystemRenderer Renderer;
+            public Material Material;
+            public float NormalDirection;
+            public ExhaustFire Jet, Drops;
+            public float DropsOwed;   // burning drops due but not yet thrown (a fraction carries over)
         }
 
         private readonly EngineSession _session;
@@ -66,6 +87,8 @@ namespace EngineSim
         private readonly Light _flash;
         private readonly AudioSource _bang;
         private float _flow, _dirt, _soot, _oil, _flashLeft, _appliedExpansion = -1f;
+        private Material _smokeMaterial, _flameMaterial;
+        private bool _unlit;
 
         public ExhaustFx(EngineSession session)
         {
@@ -133,15 +156,22 @@ namespace EngineSim
                 main.maxParticles = share;
                 var inherit = ps.inheritVelocity;
                 inherit.enabled = false;
+                e.Renderer = ps.GetComponent<ParticleSystemRenderer>();
+                if (e.Renderer != null)
+                {
+                    e.Material = e.Renderer.sharedMaterial;
+                    e.NormalDirection = e.Renderer.normalDirection;
+                }
             }
             if (_emitters.Count == 0) return;
+            Materials();
             if (_fsm != null) _fsm.enabled = false;
 
             var outlet = _emitters[0].System.gameObject;
             _flash = outlet.AddComponent<Light>();
             _flash.type = LightType.Point;
             _flash.color = Flame;
-            _flash.range = 0.8f;   // the smoke at the outlet, not the vehicle
+            _flash.range = 1.5f;   // the smoke and pipe at the outlet, not the whole vehicle
             _flash.intensity = 0f;
             _flash.enabled = false;
 
@@ -181,6 +211,7 @@ namespace EngineSim
             Color color = Color.Lerp(Haze, Oil, _oil / Mathf.Max(0.001f, _soot + _oil) * Mathf.Clamp01(_dirt * 2f));
             color = Color.Lerp(color, Soot, _soot / Mathf.Max(0.001f, _soot + _oil) * Mathf.Clamp01(_dirt * 1.5f));
             color.a = 0.07f + 0.85f * _dirt;
+            color = Lit(color);
             float lifetime = 1f + 3f * _dirt;          // dirty smoke hangs
             float size = 1f + 0.5f * _flow + 1.5f * _dirt;
             float expansion = 2f + 8f * _dirt;         // and billows: x2 clean, x10 filthy
@@ -220,6 +251,18 @@ namespace EngineSim
                     growth.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
                         new Keyframe(0f, e.GrowFrom / _appliedExpansion), new Keyframe(1f, 1f)));
                 }
+
+                // an engine burning a lot of oil, worked hard, blows burning drops of it out of the pipe: none
+                // below half its worst, up to a few a second flat out
+                if (e.Drops != null)
+                {
+                    e.DropsOwed += dt * 4f * amount * Mathf.Clamp01((_oil - 0.5f) / 0.5f) * throttle * Mathf.Clamp01(_flow);
+                    if (e.DropsOwed >= 1f)
+                    {
+                        Vector3 at = e.System.transform.position, dir = Outward(e.System);
+                        for (; e.DropsOwed >= 1f; e.DropsOwed -= 1f) ThrowDrop(e, at, dir, 1.5f, 4f);
+                    }
+                }
             }
 
             if (backfires > 0 && Plugin.BackfireEntry.Value > 0f) Backfire();
@@ -236,11 +279,34 @@ namespace EngineSim
             foreach (var e in _emitters)
             {
                 if (e.System == null) continue;
-                float baseSize = Max(e.Size);
-                var flame = new ParticleSystem.EmitParams { startColor = new Color(0.9f, 0.45f, 0.12f, 0.5f), startSize = baseSize, startLifetime = 0.08f };
-                e.System.Emit(flame, 2);
-                var puff = new ParticleSystem.EmitParams { startColor = new Color(0.05f, 0.05f, 0.05f, 0.85f), startSize = baseSize * 2f };
-                e.System.Emit(puff, 4);
+                var main = e.System.main;
+                Vector3 at = e.System.transform.position, dir = Outward(e.System);
+                // the flame: a jet out of the pipe, gone in a few hundredths of a second
+                if (e.Jet != null)
+                    for (int i = 0; i < 12; i++)
+                        e.Jet.Emit(at + dir * Random.Range(0f, 0.05f), Spread(dir, 6f) * Random.Range(8f, 16f), Random.Range(0.1f, 0.2f), Random.Range(0.04f, 0.09f));
+                // an oily engine's backfire spits burning oil with it
+                if (e.Drops != null)
+                {
+                    int drops = Mathf.RoundToInt(10f * _oil * Random.Range(0.6f, 1.4f));
+                    for (int i = 0; i < drops; i++) ThrowDrop(e, at, dir, 3f, 7f);
+                }
+                // the slug of fuel-rich smoke: leaves fast and billows past the running smoke's size; born at the
+                // running smoke's full size (its growth curve takes it back to the birth size and out again)
+                float size = Max(main.startSize) * 1.6f, life = Max(main.startLifetime) * 1.5f;
+                for (int i = 0; i < 10; i++)
+                {
+                    var puff = new ParticleSystem.EmitParams
+                    {
+                        position = at + dir * Random.Range(0f, 0.1f),
+                        velocity = Spread(dir, 15f) * Random.Range(4f, 9f),
+                        startColor = Lit(new Color(0.06f, 0.055f, 0.05f, 0.9f)),
+                        startSize = size * Random.Range(0.8f, 1.2f),
+                        startLifetime = life * Random.Range(0.8f, 1.2f),
+                        applyShapeToPosition = false,
+                    };
+                    e.System.Emit(puff, 1);
+                }
             }
             if (_flash != null)
             {
@@ -276,6 +342,109 @@ namespace EngineSim
                 if (_gameClips.TryGetValue(choice, out clip)) return clip;
             }
             return Report();
+        }
+
+        // a burning drop of oil out of the pipe: thrown at a few m/s, then it falls, lands and burns out
+        private static void ThrowDrop(Emitter e, Vector3 at, Vector3 dir, float slowest, float fastest)
+        {
+            e.Drops.Emit(at + dir * 0.03f, Spread(dir, 20f) * Random.Range(slowest, fastest), Random.Range(0.04f, 0.1f), Random.Range(1f, 3f));
+        }
+
+        // which way the emitter blows: its shape's axis (a cone's), in the world
+        private static Vector3 Outward(ParticleSystem ps)
+        {
+            var shape = ps.shape;
+            var local = shape.enabled ? Quaternion.Euler(shape.rotation) * Vector3.forward : Vector3.forward;
+            return ps.transform.TransformDirection(local).normalized;
+        }
+
+        private static Vector3 Spread(Vector3 dir, float degrees)
+        {
+            return Quaternion.AngleAxis(Random.Range(0f, degrees), Vector3.Cross(dir, Random.onUnitSphere).normalized) * dir;
+        }
+
+        // The smoke's colour in the scene's light: the ambient light (its probe, around the horizon and up) plus
+        // the sun's share, half its light (a cloud scatters about half the light falling on it towards any eye)
+        // as far as the sun is up. With the game's own (lit) material the colour is left as it is.
+        private Color Lit(Color albedo)
+        {
+            if (!_unlit) return albedo;
+            if (_lightFrame != Time.frameCount)
+            {
+                _lightFrame = Time.frameCount;
+                var probe = RenderSettings.ambientProbe;
+                var dirs = new[] { Vector3.up, Vector3.forward, Vector3.back, Vector3.left, Vector3.right };
+                var got = new Color[dirs.Length];
+                probe.Evaluate(dirs, got);
+                Color ambient = Color.black;
+                foreach (var c in got) ambient += c;
+                ambient /= got.Length;
+                if (_sun == null && Time.time - _sunLooked > 5f)
+                {
+                    _sunLooked = Time.time;
+                    _sun = RenderSettings.sun != null ? RenderSettings.sun
+                        : Object.FindObjectsOfType<Light>().Where(l => l.type == LightType.Directional).OrderByDescending(l => l.intensity).FirstOrDefault();
+                }
+                Color sun = Color.black;
+                if (_sun != null && _sun.isActiveAndEnabled)
+                    sun = _sun.color * _sun.intensity * 0.5f * Mathf.Clamp01(-_sun.transform.forward.y * 5f);
+                _light = ambient + sun;
+            }
+            return new Color(Mathf.Min(1f, albedo.r * _light.r), Mathf.Min(1f, albedo.g * _light.g), Mathf.Min(1f, albedo.b * _light.b), albedo.a);
+        }
+
+        // An unlit smoke material (the game's texture, alpha blended) and an additive one for flame, if the game
+        // has the shaders; else the game's material with spherical normals, and no flame jet.
+        private void Materials()
+        {
+            if (!_shadersLooked)
+            {
+                _shadersLooked = true;
+                var standard = Shader.Find("Particles/Standard Unlit");
+                _fadeShader = standard ?? Shader.Find("Legacy Shaders/Particles/Alpha Blended") ?? Shader.Find("Mobile/Particles/Alpha Blended");
+                _addShader = standard ?? Shader.Find("Legacy Shaders/Particles/Additive") ?? Shader.Find("Mobile/Particles/Additive");
+            }
+            var first = _emitters[0];
+            Plugin.Verbose("exhaust smoke: " + _emitters.Count + " emitter(s), game material '" + (first.Material != null ? first.Material.name : "none")
+                + "' (shader '" + (first.Material != null && first.Material.shader != null ? first.Material.shader.name : "none") + "', normals "
+                + first.NormalDirection.ToString("0.##") + "); unlit smoke " + (_fadeShader != null ? "'" + _fadeShader.name + "'" : "unavailable")
+                + ", flame " + (_addShader != null ? "'" + _addShader.name + "'" : "unavailable"));
+            var texture = first.Material != null && first.Material.HasProperty("_MainTex") ? first.Material.mainTexture : null;
+            if (_fadeShader != null)
+            {
+                _smokeMaterial = new Material(_fadeShader) { name = "EngineSim smoke", mainTexture = texture };
+                Blend(_smokeMaterial, false);
+                _unlit = true;
+            }
+            if (_addShader != null)
+            {
+                _flameMaterial = new Material(_addShader) { name = "EngineSim flame", mainTexture = texture };
+                Blend(_flameMaterial, true);
+            }
+            foreach (var e in _emitters)
+            {
+                if (e.Renderer == null) continue;
+                if (_smokeMaterial != null) e.Renderer.sharedMaterial = _smokeMaterial;
+                else e.Renderer.normalDirection = 0f;
+                e.Jet = ExhaustFire.At(e.System.transform, false, _flameMaterial);
+                e.Drops = ExhaustFire.At(e.System.transform, true, _flameMaterial);
+            }
+        }
+
+        // Particles/Standard Unlit's own blend settings (what its material editor sets): alpha blended (Fade) or
+        // additive; the legacy shaders blend by themselves
+        private static void Blend(Material m, bool additive)
+        {
+            if (m.shader.name != "Particles/Standard Unlit") return;
+            m.SetFloat("_Mode", additive ? 4f : 2f);
+            m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            m.SetInt("_DstBlend", (int)(additive ? UnityEngine.Rendering.BlendMode.One : UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha));
+            m.SetInt("_ZWrite", 0);
+            m.DisableKeyword("_ALPHATEST_ON");
+            m.EnableKeyword("_ALPHABLEND_ON");
+            m.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            m.DisableKeyword("_ALPHAMODULATE_ON");
+            m.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
         }
 
         // a MinMaxCurve scaled, whatever its mode (the 'multiplier' properties don't scale two constants)
@@ -369,7 +538,16 @@ namespace EngineSim
                 var fade = e.System.colorOverLifetime;
                 fade.color = e.ColorOverLife;
                 fade.enabled = e.ColorOn;
+                if (e.Renderer != null)
+                {
+                    e.Renderer.sharedMaterial = e.Material;
+                    e.Renderer.normalDirection = e.NormalDirection;
+                }
+                e.Jet?.Destroy();
+                e.Drops?.Destroy();
             }
+            if (_smokeMaterial != null) Object.Destroy(_smokeMaterial);
+            if (_flameMaterial != null) Object.Destroy(_flameMaterial);
             if (_fsm != null) _fsm.enabled = true;
             if (_flash != null) Object.Destroy(_flash);
             if (_bang != null) Object.Destroy(_bang);

@@ -39,13 +39,17 @@ turns it (rolling in gear, a push, the starter) and is heard turning over, just 
 
 Added without changing the simulation (it is only read), each with its own setting under `[Effects]`:
 
-- **Backfires**: unburnt fuel reaching a hot exhaust runner bangs at the exhaust, with flame and dark smoke from its
-  emitters and a flash: on the rev limiter, on lifting off, and often from a worn engine's misfires (outside the
-  engine's own sound).
+- **Backfires**: unburnt fuel reaching a hot exhaust runner bangs at the exhaust: on the rev limiter, on lifting
+  off, and often from a worn engine's misfires (outside the engine's own sound). A short jet of flame (the game's
+  own fire, the tin can light's) leaves the pipe with a slug of dark smoke that billows into a cloud, and a flash;
+  an engine burning oil spits burning drops of it that fall and burn out where they land.
 - **Valve tick**: a tick as each valve closes, from the engine's cam timing; louder with rpm and wear.
 - **Engine rock**: the engine rocks on its mounts with its torque, in place of the game's constant shake.
 - **Exhaust smoke**: the fitted exhaust's own emitters follow the engine's exhaust: puffs and flow, black with
-  unburnt fuel and heavy boost (rolling coal), blue-grey with blow-by as it wears, smoke while cranking.
+  unburnt fuel and heavy boost (rolling coal), blue-grey with blow-by as it wears, smoke while cranking. Drawn
+  in the scene's light, the same from every side (the game's smoke material lit each puff as a flat card, so it
+  went fullbright with the sun behind you). An engine burning a lot of oil, worked hard, blows burning drops of it
+  out of the pipe.
 - **Chassis torque**: the engine's torque reaction rolls the vehicle body.
 
 A low-pass filter (`[Audio] LowRpmFilter`, on by default, with its cutoffs) takes out the gas model's squeal at
