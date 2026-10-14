@@ -44,11 +44,18 @@ void Effects::initialize(Engine *engine, const es_engine_params &p, double simul
         const double fire = p.firingAngleDeg[c];
         const double ivc = fire + 360 + p.intakeLobeCenterDeg + p.intakeCamDurationDeg / 2 + 10;
         const double evc = fire + 360 - p.exhaustLobeCenterDeg + p.exhaustCamDurationDeg / 2 + 10;
-        for (double a : { ivc, evc }) {
+        // how hard each valve seats: its closing flank's speed, lift over the flank's angle (half the
+        // duration), against a typical stock cam's (9 mm over 225 degrees); a tall, short cam slams its
+        // valves home, a mild one sets them down
+        const double reference = 9.0 / 225.0;
+        const double intakeSeat = std::min(3.0, std::max(0.3, (p.intakeCamLiftMm / std::max(60.0, (double)p.intakeCamDurationDeg)) / reference));
+        const double exhaustSeat = std::min(3.0, std::max(0.3, (p.exhaustCamLiftMm / std::max(60.0, (double)p.exhaustCamDurationDeg)) / reference));
+        const double angles[2] = { ivc, evc }, seats[2] = { intakeSeat, exhaustSeat };
+        for (int k = 0; k < 2; ++k) {
             Valve v;
-            v.angle = std::fmod(std::fmod(a, 720.0) + 720.0, 720.0) * constants::pi / 180;
+            v.angle = std::fmod(std::fmod(angles[k], 720.0) + 720.0, 720.0) * constants::pi / 180;
             v.variant = (int)(m_rng() % m_clicks.size());
-            v.level = level(m_rng);
+            v.level = level(m_rng) * (float)seats[k];
             m_valves.push_back(v);
         }
     }

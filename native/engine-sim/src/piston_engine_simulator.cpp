@@ -301,6 +301,9 @@ void PistonEngineSimulator::simulateStep_() {
 
     const int exhaustSystemCount = m_engine->getExhaustSystemCount();
     const int intakeCount = m_engine->getIntakeCount();
+    for (int j = 0; j < exhaustSystemCount; ++j) {
+        m_engine->getExhaustSystem(j)->resetLastTimestepOutletFlow();
+    }
     const double fluidTimestep = timestep / m_fluidSimulationSteps;
     for (int i = 0; i < m_fluidSimulationSteps; ++i) {
         for (int j = 0; j < exhaustSystemCount; ++j) {

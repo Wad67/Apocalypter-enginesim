@@ -27,6 +27,10 @@ Behaviour:
     intake draws from, for forced induction.
   - exhaust_system.h, exhaust_system.cpp: ExhaustSystem::m_outletPressure (default 1 atm) replaces the
     hard-coded 1 atm the exhaust flows out against, for a turbine's back pressure.
+  - exhaust_system.h, exhaust_system.cpp, piston_engine_simulator.cpp: ExhaustSystem::
+    getLastTimestepOutletFlow, the outlet flow summed over a timestep's fluid substeps (reset with the
+    chambers' flows): what passes a turbine at the exhaust's outlet.
+  - camshaft.h: Camshaft::setAdvance, for variable cam timing (the phase moved while running).
 
 Setters for runtime engine wear:
   - IgnitionModule::setPlugEnabled, Piston::setBlowbyK,

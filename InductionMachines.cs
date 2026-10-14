@@ -95,6 +95,7 @@ namespace EngineSim
             var desc = Describe(PartTable.Fitted(s.Vc), out key);
             if (key == s.InductionKey) return;
             s.InductionKey = key;
+            if (s.Tune != null) s.Tune.ApplyInduction(ref desc);
             s.SetInduction(desc);
             Plugin.Verbose(s.PartName + ": forced induction " + Describe(desc));
         }

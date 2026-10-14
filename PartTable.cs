@@ -79,7 +79,7 @@ namespace EngineSim
         private const string BaseIr = "-";
 
         public const string DefaultTurbo = "default_turbo", DefaultSupercharger = "default_supercharger";
-        private const string InductionHeader = "# Engine Sim forced induction (format 2).";
+        private const string InductionHeader = "# Engine Sim forced induction (format 3).";
         private const string InductionDefaults = InductionHeader + @"
 # Each forced-induction part: the pressure it is set to and its units.
 #
@@ -88,30 +88,30 @@ namespace EngineSim
 #     are for parts not listed here. Whether a part is a turbo or a supercharger is the part's own.
 #   set pressure: psi over ambient. With the simulated drivetrain (experimental) a turbo's wastegate or a
 #     supercharger's relief valve opens there, if the engine and the unit can get that far at all.
-#     Without it this is not used: the game's own boost applies. The defaults are the game's power gain
-#     as pressure (the simulated engine makes about 1 + 1.65 (p - 1) the torque at pressure ratio p).
+#     Without it this is not used: the game's own boost applies. The defaults are what such hardware is set
+#     to: wastegate springs 7 - 15 psi, Roots relief valves 6 - 14 psi, higher for the bigger units.
 #   size: 0.2 - 3, one per turbo (a part with several turbos lists each). 1 = a medium unit: for a
 #     supercharger 2 L of air per crank revolution, for a turbo a 50 mm compressor wheel. A smaller turbo
 #     spools sooner and whistles higher; a bigger supercharger moves more air, takes more power to drive,
 #     and whines lower and louder.
 
-default_turbo        = 4.5 : 1.0
-default_supercharger = 4.5 : 1.0
+default_turbo        = 8  : 1.0
+default_supercharger = 8  : 1.0
 
-8359398305947690842  = 0.45 : 0.55            # Turbo - Little Bee - Power x1.05
-1254148493211391348  = 0.8  : 0.65            # Turbo - War Whistle - Power x1.09
-8589483064466669470  = 4.45 : 0.85, 0.85      # Turbo - Double Trouble - Power x1.5 (twin)
-8446457777719976447  = 5.3  : 1.4             # Turbo - Big Brutus - Power x1.6
-865075917467842793   = 6.2  : 0.6, 0.6, 1.4   # Turbo - Triple Threat - Power x1.7 (two small, one large)
+8359398305947690842  = 7  : 0.55              # Turbo - Little Bee
+1254148493211391348  = 8  : 0.65              # Turbo - War Whistle
+8589483064466669470  = 10 : 0.85, 0.85        # Turbo - Double Trouble (twin)
+8446457777719976447  = 12 : 1.4               # Turbo - Big Brutus
+865075917467842793   = 15 : 0.6, 0.6, 1.4     # Turbo - Triple Threat (two small, one large)
 
-7322277502189585245  = 0.45 : 0.55            # Supercharger - Tiny Tim - Power x1.05
-3060985782920507676  = 0.8  : 0.65            # Supercharger - Small Sam - Power x1.09
-1280457821324750492  = 1.8  : 0.8             # Supercharger - Med Mark - Power x1.2
-7895438034034407351  = 4.45 : 1.25            # supercharger_4 - Power x1.5
-1235638759040636875  = 5.3  : 1.4             # Supercharger - The Average - Power x1.6
-3556354107990682579  = 6.2  : 1.0, 1.0        # Supercharger - Double Barrel - Power x1.7 (twin)
-8130352843546044666  = 7.1  : 1.7             # Supercharger - Big Joe - Power x1.8
-3223342285364861050  = 8.0  : 1.85            # Supercharger - Screaming Skull - Power x1.9
+7322277502189585245  = 6  : 0.55              # Supercharger - Tiny Tim
+3060985782920507676  = 7  : 0.65              # Supercharger - Small Sam
+1280457821324750492  = 8  : 0.8               # Supercharger - Med Mark
+7895438034034407351  = 9  : 1.25              # supercharger_4
+1235638759040636875  = 10 : 1.4               # Supercharger - The Average
+3556354107990682579  = 12 : 1.0, 1.0          # Supercharger - Double Barrel (twin)
+8130352843546044666  = 12 : 1.7               # Supercharger - Big Joe
+3223342285364861050  = 14 : 1.85              # Supercharger - Screaming Skull
 ";
 
         private const string ExhaustsHeader = "# Engine Sim exhaust profiles (format 6).";
@@ -355,7 +355,7 @@ default              = -, 0.95, 0.25, 1.0, 0.85
             InductionPart part;
             if (id != 0 && _induction.TryGetValue(id.ToString(CultureInfo.InvariantCulture), out part)) return part;
             if (_induction.TryGetValue(supercharger ? DefaultSupercharger : DefaultTurbo, out part)) return part;
-            return new InductionPart { Psi = 4.5f, Sizes = new[] { 1f } };
+            return new InductionPart { Psi = 8f, Sizes = new[] { 1f } };
         }
 
         public static bool IsInduction(long id) { Reload(false); return _induction.ContainsKey(id.ToString(CultureInfo.InvariantCulture)); }
@@ -415,16 +415,19 @@ default              = -, 0.95, 0.25, 1.0, 0.85
         public static bool IsExhaust(long id) { return _exhausts.ContainsKey(id.ToString(CultureInfo.InvariantCulture)); }
 
         // The parts fitted to a vehicle. A fitted part is an active part (it has an ES3Prefab) under the
-        // vehicle without a Rigidbody: the game's attach logic removes a part's Rigidbody when it is
-        // fitted and gives it one back when it comes off, so a loose part carried along is not taken.
+        // vehicle tagged vehPart, without a Rigidbody: the game's attach logic tags a part vehPart and removes its
+        // Rigidbody when it is fitted, and tags it vehPartRemoved when it comes off. A part carried along (in a load
+        // bed it has no Rigidbody either) is not taken.
         // Engines are the parts listed in the engine table; exhausts those in the exhaust table.
+        private const string FittedTag = "vehPart";
+
         public static FittedParts Fitted(VehicleController vc)
         {
             var fitted = new FittedParts { Induction = new List<KeyValuePair<long, GameObject>>() };
             if (vc == null) return fitted;
             foreach (var p in vc.GetComponentsInChildren<ES3Prefab>(false))
             {
-                if (p.GetComponent<Rigidbody>() != null) continue;
+                if (!p.CompareTag(FittedTag) || p.GetComponent<Rigidbody>() != null) continue;
                 if (fitted.EngineId == 0 && IsEngine(p.prefabId)) { fitted.EngineId = p.prefabId; fitted.Engine = p.gameObject; }
                 else if (fitted.ExhaustId == 0 && IsExhaust(p.prefabId)) { fitted.ExhaustId = p.prefabId; fitted.Exhaust = p.gameObject; }
                 else if (_induction.ContainsKey(p.prefabId.ToString(CultureInfo.InvariantCulture)))
@@ -441,7 +444,7 @@ default              = -, 0.95, 0.25, 1.0, 0.85
         public static IEnumerable<ES3Prefab> UnlistedParts(VehicleController vc)
         {
             foreach (var p in vc.GetComponentsInChildren<ES3Prefab>(false))
-                if (p.GetComponent<Rigidbody>() == null && !IsEngine(p.prefabId) && !IsExhaust(p.prefabId)
+                if (p.CompareTag(FittedTag) && p.GetComponent<Rigidbody>() == null && !IsEngine(p.prefabId) && !IsExhaust(p.prefabId)
                     && !_induction.ContainsKey(p.prefabId.ToString(CultureInfo.InvariantCulture))) yield return p;
         }
 

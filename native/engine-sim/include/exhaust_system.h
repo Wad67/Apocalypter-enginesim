@@ -38,6 +38,9 @@ class ExhaustSystem : public Part {
         inline double getSoundLength() const { return m_soundLength > 0 ? m_soundLength : m_length; }
         inline void setSoundLength(double length) { m_soundLength = length; }
         inline double getFlow() const { return m_flow; }
+        // what left through the outlet over the last whole timestep (every fluid substep of it), mol
+        inline double getLastTimestepOutletFlow() const { return m_lastTimestepOutletFlow; }
+        inline void resetLastTimestepOutletFlow() { m_lastTimestepOutletFlow = 0; }
         inline double getAudioVolume() const { return m_audioVolume; }
         inline double getPrimaryFlowRate() const { return m_primaryFlowRate; }
         inline double getCollectorCrossSectionArea() const { return m_collectorCrossSectionArea; }
@@ -68,6 +71,7 @@ class ExhaustSystem : public Part {
         int m_index;
 
         double m_flow;
+        double m_lastTimestepOutletFlow = 0;
 };
 
 #endif /* ATG_ENGINE_SIM_EXHAUST_SYSTEM_H */

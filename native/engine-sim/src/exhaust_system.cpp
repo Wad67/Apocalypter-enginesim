@@ -75,6 +75,7 @@ void ExhaustSystem::process(double dt) {
     flowParams.k_flow = m_outletFlowRate;
 
     m_flow = m_system.flow(flowParams);
+    m_lastTimestepOutletFlow -= m_flow;   // into the system from outside is positive
 
     m_system.dissipateExcessVelocity();
     m_system.updateVelocity(dt, m_velocityDecay);

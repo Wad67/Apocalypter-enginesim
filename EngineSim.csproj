@@ -34,6 +34,8 @@
     <Reference Include="Assembly-CSharp-firstpass"><HintPath>$(ManagedDir)/Assembly-CSharp-firstpass.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp"><HintPath>$(ManagedDir)/Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="NWH.VehiclePhysics2"><HintPath>$(ManagedDir)/NWH.VehiclePhysics2.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(ManagedDir)/UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(ManagedDir)/UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="PlayMaker"><HintPath>$(ManagedDir)/PlayMaker.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="NWH.Common"><HintPath>$(ManagedDir)/NWH.Common.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="NWH.WheelController"><HintPath>$(ManagedDir)/NWH.WheelController.dll</HintPath><Private>false</Private></Reference>
@@ -48,6 +50,8 @@
     <Warning Text="native/build/win/enginesim_native.dll not built; run native/build.sh" Condition="!Exists('native/build/win/enginesim_native.dll')" />
     <ItemGroup><IrFiles Include="native/ir/*.wav" /></ItemGroup>
     <Copy SourceFiles="@(IrFiles)" DestinationFolder="$(DeployDir)/ir" />
+    <ItemGroup><KitAssets Include="sigma_assets/*" /></ItemGroup>
+    <Copy SourceFiles="@(KitAssets)" DestinationFolder="$(DeployDir)/sigma_assets" />
     <Message Importance="high" Text="Deployed $(AssemblyName).dll to $(DeployDir)" />
   </Target>
 </Project>

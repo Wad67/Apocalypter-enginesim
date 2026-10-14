@@ -52,6 +52,51 @@ Added without changing the simulation (it is only read), each with its own setti
   out of the pipe.
 - **Chassis torque**: the engine's torque reaction rolls the vehicle body.
 
+### Engine Tuning Toolkit
+
+A toolbox of its own (made by SigmaMod from `EngineSim/sigma_assets/`, so it needs SigmaMod; found where repair
+boxes are, and in Apocaspawner). Look at it with empty hands and press Use to take the tools out; Use on it again,
+or X, puts them away. With them out, left click an engine, fitted or lying loose, and its tune opens, in a
+window that looks like Windows 95 (the mouse is yours while it is open):
+
+| | Range | What it is |
+|---|---|---|
+| Ignition timing | ±10° | the whole advance curve moved: turning the distributor |
+| Advance springs | ±40 % | lighter or heavier springs: the advance comes in at lower or higher rpm |
+| Intake / exhaust timing | ±8° | each cam advanced or retarded on an adjustable gear |
+| Intake / exhaust duration | ±30° | a longer or shorter lobe: a hotter or milder cam |
+| Intake / exhaust lift | -20 to +25 % | a taller or lower lobe |
+| Variable timing | on / off | the intake cams phased while running: up to 30° advanced low down under load, 10° retarded near the limit |
+| Mixture | 8.8:1 to 17:1 | the carburettor's mixture screw (petrol; a diesel's is set by its injection pump) |
+| Air filter | -20 to +30 % | clogged, to an open element |
+| Throttle linkage | x0.5 to x2 | the pedal-to-plate curve: below 1 sharper, above 1 progressive |
+| Idle speed | -300 to +500 rpm | the idle screw |
+| Rev limiter | -1500 to +1000 rpm | where the ignition cuts out |
+| Limiter cut | up to 0.3 s | how long it cuts for: a soft or a hard limiter |
+| Wastegate | -6 to +10 psi | the turbos' boost (its spring, or a boost controller); only with turbos fitted |
+| Blower pulley | -20 to +30 % | how fast the supercharger is driven; only with one fitted |
+| Relief valve | -4 to +8 psi | where the supercharger's relief valve lets go |
+
+All of them change the simulated engine itself, and engine-sim works out what follows: advance, cam timing and
+cam size move where the power is; a rich mixture leaves fuel unburnt (black smoke, backfires) and costs low-rpm
+torque, a lean one burns slower and costs power everywhere. The valve tick follows the cams: each valve ticks as
+it closes, and a tall, short lobe slams it home harder than a mild one sets it down. To try it: **Ignition** turns the
+key, **Starter** cranks while you hold it, and the **Throttle** slider holds the engine's throttle, all only while
+the window is open (closing it hands them back to the dashboard and your feet). With the simulated drivetrain the
+key and starter are the simulation's own: it fires, or doesn't, as it would. Without it they are the game's: the
+starter runs the game's start, and the key off stops the engine. A tuned rev limit moves the game's own engine's
+limit too, so a higher one is really reached. A toolkit doesn't machine anything:
+bore, stroke, cylinders, cam profiles and compression stay as built. **Apply** sets the tune on that engine
+only, and its simulation starts again with it; **Stock** puts it back as built. Tunes are kept per engine and
+per save slot in `BepInEx/config/EngineSim.tunes.cfg` (an engine is known by the name it is saved under, with its
+vehicle's where two engines share one). They are kept when you apply them, whether or not you save the game.
+
+**Simulate Pull** puts the window's tune (applied or not) on a dyno: the engine is made again off to one side,
+with its vehicle's exhaust, turbos or supercharger and condition, and held at full throttle at every 500 rpm from
+1000 to its limit until it settles, then averaged over 2 s. A second window plots torque (red), power (blue) and boost (green), with peaks;
+the pull before it stays faded behind, so you can see what a change did. The rpm points run side by side on half
+the CPU's cores, so a pull takes a few seconds.
+
 A low-pass filter (`[Audio] LowRpmFilter`, on by default, with its cutoffs) takes out the gas model's squeal at
 very low engine speeds.
 
@@ -133,6 +178,8 @@ It works with or without the simulated drivetrain. Apoc-Air's propellers use it.
 - Apocalypter with [BepInEx 5](https://github.com/BepInEx/BepInEx/releases) (x64).
 - A reasonably modern CPU. Each simulated engine runs on its own thread and uses most of a core;
   `MaxEngines` (default 2) limits how many run at once.
+- [SigmaMod](https://github.com/Wad67/Apocalypter-sigmamod) for the Engine Tuning Toolkit (the item). Without it
+  everything else works.
 
 ## Installation
 
@@ -155,6 +202,7 @@ BepInEx\plugins\EngineSim\
 | General | `Enabled` | `true` | Off = the game's own engine sounds. |
 | Performance | `MaxEngines` | `2` | Engines simulated at once: turning or with the key on first, then the nearest. The rest keep the stock sound. |
 | Performance | `SimQuality` | `Balanced` | Gas-flow detail: `High` (engine-sim's own setting), `Balanced`, `Fast`. Lower it if the sound breaks up. |
+| Performance | `AutoQuality` | `true` | When the simulation can't keep up (its sound running dry), a notice says so and quality goes down a step on the running engines until the game restarts or `SimQuality` is changed. Off = the notice only. |
 | Audio | `Volume` | `0.8` | |
 | Audio | `DistanceAttenuation` | `1` | How much engines and turbo / supercharger sounds fade with distance: 1 = the game's rolloff, 0 = none. |
 | Audio | `DistanceScale` | `1` | Scales the game's rolloff distances; above 1 sounds carry further. |
@@ -176,6 +224,7 @@ BepInEx\plugins\EngineSim\
 | Audio | `LowRpmFilter` | `true` | Low-pass at low rpm, with `LowRpmFilterCrank`, `LowRpmFilterIdle`, `LowRpmFilterOpenAt`. |
 | Effects | `Backfires`, `BackfireSound`, `BackfireChance` | `1`, `gunshot_6`, `0.01` | |
 | Effects | `ValveTick`, `EngineRock`, `ExhaustSmoke`, `ChassisTorque` | `1` | 0 = off / the game's own. |
+| Effects | `TuningKit` | on | The Engine Tuning Toolkit. |
 | Experimental | `⚠ Simulated drivetrain ⚠` | `false` | The simulated engine powers the vehicle. |
 | Experimental | `Match game power` | `true` | Scale its torque to the game's rated power. |
 | Experimental | `Hard starting` | `1` | 0 = every charge lights from the first turn. |
@@ -241,13 +290,14 @@ default              = -, 0.95, 0.25, 1.0, 0.85
 
 `BepInEx\config\EngineSim.induction.cfg` lists each turbo and supercharger part's set pressure (psi; the wastegate
 or relief valve with the simulated drivetrain) and its units by relative size (1 = a medium unit: a 50 mm turbo
-compressor, or a blower moving 2 L per crank revolution):
+compressor, or a blower moving 2 L per crank revolution). The pressures are what such hardware is set to, not the
+game's power figures; how close a part gets to its setting depends on its size against the engine's:
 
 ```
 # part id = set pressure : size [, size ...]
-865075917467842793   = 6.2  : 0.6, 0.6, 1.4   # Turbo - Triple Threat - Power x1.7 (two small, one large)
-8589483064466669470  = 4.45 : 0.85, 0.85      # Turbo - Double Trouble - Power x1.5 (twin)
-1280457821324750492  = 1.8  : 0.8             # Supercharger - Med Mark - Power x1.2
+865075917467842793   = 15 : 0.6, 0.6, 1.4     # Turbo - Triple Threat (two small, one large)
+8589483064466669470  = 10 : 0.85, 0.85        # Turbo - Double Trouble (twin)
+1280457821324750492  = 8  : 0.8               # Supercharger - Med Mark
 ```
 
 ## How it works

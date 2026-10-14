@@ -26,6 +26,9 @@ namespace EngineSim
         private static readonly AccessTools.FieldRef<RealisticEngineSound, AudioMixerGroup> ChosenMixer =
             AccessTools.FieldRefAccess<RealisticEngineSound, AudioMixerGroup>("_choosedAudioMixer");
 
+        public static EngineManager Instance;
+        private void Awake() { Instance = this; }
+
         private readonly Dictionary<RealisticEngineSound, EngineSession> _sessions = new Dictionary<RealisticEngineSound, EngineSession>();
         private readonly Dictionary<RealisticEngineSound, DriveCoupling> _couplings = new Dictionary<RealisticEngineSound, DriveCoupling>();
         private readonly Dictionary<RealisticEngineSound, EngineEffects> _effects = new Dictionary<RealisticEngineSound, EngineEffects>();
@@ -36,6 +39,73 @@ namespace EngineSim
         private AudioListener _listener;
 
         public static string IrDirectory;
+
+        // Keeping up: an engine whose audio runs dry (more than a tenth of each second, three seconds running) is a
+        // simulation slower than real time. Said on screen; with AutoQuality, quality goes down a step (for this run
+        // of the game: QualityDrop, cleared when SimQuality is set), on the running engines as they go. Not judged
+        // while a dyno pull is using the cores.
+        public static int QualityDrop;
+        public static SimQuality Quality => (SimQuality)Mathf.Min((int)SimQuality.Fast, (int)Plugin.QualityEntry.Value + QualityDrop);
+        public static int FluidSteps => Quality == SimQuality.High ? 8 : Quality == SimQuality.Fast ? 4 : 6;
+
+        // the quality on the engines running now: the gas sub-steps change from their next step, no restart
+        public static void ApplyQuality()
+        {
+            if (Instance == null) return;
+            foreach (var s in Instance._sessions.Values) s.FluidSteps = FluidSteps;
+        }
+        private const float BehindShare = 0.1f;
+        private const int BehindSeconds = 3;
+        private readonly Dictionary<EngineSession, long> _underrunSeen = new Dictionary<EngineSession, long>();
+        private int _behindFor;
+        private float _nextKeepUp;
+        private string _notice;
+        private float _noticeUntil;
+        private GUIStyle _noticeStyle;
+
+        private void KeepUp()
+        {
+            if (Time.unscaledTime < _nextKeepUp) return;
+            _nextKeepUp = Time.unscaledTime + 1f;
+            long perSecond = Mathf.Max(1, AudioSettings.outputSampleRate);
+            EngineSession worst = null;
+            long worstLost = 0;
+            foreach (var s in _sessions.Values)
+            {
+                if (!s.Ready) continue;
+                long now = s.UnderrunSamples;
+                long lost = _underrunSeen.TryGetValue(s, out long before) ? now - before : 0;
+                _underrunSeen[s] = now;
+                if (lost > worstLost) { worstLost = lost; worst = s; }
+            }
+            foreach (var gone in _underrunSeen.Keys.Where(k => !_sessions.ContainsValue(k)).ToList()) _underrunSeen.Remove(gone);
+            if (Dyno.Running > 0 || worst == null || worstLost < perSecond * BehindShare) { _behindFor = 0; return; }
+            if (++_behindFor < BehindSeconds) return;
+            _behindFor = 0;
+            string engines = _sessions.Count == 1 ? "1 engine" : _sessions.Count + " engines";
+            if (Plugin.AutoQualityEntry.Value && Quality != SimQuality.Fast)
+            {
+                QualityDrop++;
+                Notice($"Engine Sim can't keep up ({engines}, {worst.PartName} {100f * worstLost / perSecond:0} % short): quality lowered to {Quality}");
+                ApplyQuality();
+            }
+            else Notice($"Engine Sim can't keep up ({engines}, {worst.PartName} {100f * worstLost / perSecond:0} % short): lower MaxEngines" + (Quality != SimQuality.Fast ? " or SimQuality" : ""));
+        }
+
+        private void Notice(string text)
+        {
+            Plugin.Log.LogWarning(text);
+            _notice = text;
+            _noticeUntil = Time.unscaledTime + 8f;
+        }
+
+        private void OnGUI()
+        {
+            if (_notice == null || Time.unscaledTime > _noticeUntil) return;
+            if (_noticeStyle == null) _noticeStyle = new GUIStyle(Win95.Skin.box) { wordWrap = true, alignment = TextAnchor.MiddleCenter, padding = new RectOffset(10, 10, 6, 6) };
+            var size = _noticeStyle.CalcHeight(new GUIContent(_notice), 460f);
+            GUI.Box(new Rect((Screen.width - 460f) / 2f, 12f, 460f, size), _notice, _noticeStyle);
+        }
 
         private void Update()
         {
@@ -52,6 +122,8 @@ namespace EngineSim
                 StopAll("settings changed");   // restarted by the next scan with the new settings
                 _nextScan = 0;
             }
+
+            KeepUp();
 
             if (Time.unscaledTime >= _nextScan)
             {
@@ -127,12 +199,12 @@ namespace EngineSim
                 // the game's speed, set by the simulated engine's own torque; the throttle is cut while shifting
                 bool shiftCut = s.Vc.powertrain.transmission.isShifting && rpm > engine.idleRPM;
                 bool key = coupling != null ? coupling.KeyOn : engine.ignition;
-                s.SetControls(rpm, shiftCut ? 0f : engine.ThrottlePosition, key, ReadCondition(s));
+                s.SetControls(rpm, shiftCut ? 0f : Throttle(s, engine.ThrottlePosition), key, ReadCondition(s));
             }
             else
             {
                 // below this the game's engine is stopped; let the sim crank coast instead of holding it
-                s.SetControls(rpm > 50f ? rpm : 0f, engine.ThrottlePosition, engine.IsRunning, ReadCondition(s));
+                s.SetControls(rpm > 50f ? rpm : 0f, Throttle(s, engine.ThrottlePosition), engine.IsRunning, ReadCondition(s));
             }
             // the game's rev limit (its own cut is a one-frame flag, or none: RPM is just clamped), and
             // forced induction as intake pressure: the simulated engine's power rises about 1.65x as fast
@@ -141,9 +213,16 @@ namespace EngineSim
             var fi = engine.forcedInduction;
             float gain = fi != null && fi.useForcedInduction ? fi.PowerGainMultiplier : 1f;
             if (s.Drive) InductionMachines.Update(s);
+            // a tuned limit moves the game's engine's limit too: it clamps its speed there, so the simulation's
+            // limiter would never be reached above it (put back when the simulation stops)
+            if (s.Tune != null && s.Tune.Limiter != 0f)
+            {
+                if (s.StockLimit <= 0f) s.StockLimit = engine.revLimiterRPM;
+                engine.revLimiterRPM = Mathf.Max(engine.idleRPM + 500f, s.StockLimit + s.Tune.Limiter);
+            }
             s.SetLimits(engine.revLimiterRPM,
-                engine.revLimiterCutoffDuration > 0.02f ? engine.revLimiterCutoffDuration : 0.08f,
-                s.Drive ? 1f : 1f + (gain - 1f) / 1.65f);
+                s.Tune != null && s.Tune.Cut > 0f ? s.Tune.Cut : engine.revLimiterCutoffDuration > 0.02f ? engine.revLimiterCutoffDuration : 0.08f,
+                s.Drive ? 1f : Mathf.Max(1f, 1f + (gain - 1f) / 1.65f + (gain > 1f && s.Tune != null ? s.Tune.Wastegate / 14.7f : 0f)));
         }
 
         private void Scan()
@@ -221,10 +300,12 @@ namespace EngineSim
 
             string part = spec.Label ?? spec.Id.ToString();
             var desc = new Native.EngineDesc { engine = spec.Params };
-            desc.fluidSteps = Plugin.QualityEntry.Value == SimQuality.High ? 8 : Plugin.QualityEntry.Value == SimQuality.Fast ? 4 : 6;
+            desc.fluidSteps = FluidSteps;
             var engine = vc.powertrain.engine;
             if (engine.revLimiterRPM > 500f) desc.redlineRpm = engine.revLimiterRPM;
             if (engine.idleRPM > 100f) desc.idleRpm = engine.idleRPM;
+            var tune = Tunes.For(fitted.Engine);
+            if (tune != null) tune.Apply(ref desc);
 
             ExhaustProfile profile;
             var sound = PartTable.ResolveExhaust(fitted.ExhaustId, out profile);
@@ -253,9 +334,12 @@ namespace EngineSim
             string inductionKey = "";
             var induction = new Native.InductionDesc { turboSize = new float[Native.MaxTurbos] };
             if (drive) induction = InductionMachines.Describe(fitted, out inductionKey);
+            if (drive && tune != null) tune.ApplyInduction(ref induction);
             var session = new EngineSession(res, vc, part, fitted, loudness, desc, IrDirectory, mixer,
                 drive, Plugin.MatchGamePowerEntry.Value ? spec.DriveTorqueScale : 1f, spec.PeakTorque);
+            session.Tune = tune;
             _sessions[res] = session;
+            if (tune != null) Plugin.Log.LogInfo(vc.name + ": engine tuned: " + tune);
             if (drive)
             {
                 session.InductionKey = inductionKey;
@@ -288,10 +372,80 @@ namespace EngineSim
                 _effects.Remove(res);
             }
             _chassisTorque.Remove(s);
+            if (s.StockLimit > 0f && s.Vc != null) s.Vc.powertrain.engine.revLimiterRPM = s.StockLimit;
             s.Stop();
             if (res != null) ResPatch.Release(res);
             else ResPatch.Prune();
             Plugin.Verbose("Stopped " + s.PartName + ": " + why);
+        }
+
+        // For a dyno pull of an engine part (Engine Tuning Toolkit): its simulation as TryStart would make it, with this
+        // tune and the vehicle's fitted exhaust and machines; a loose engine with a base exhaust and none
+        public static bool PullSetup(GameObject enginePart, Tune tune, out Native.EngineDesc desc, out Native.InductionDesc induction, out float condition)
+        {
+            desc = default(Native.EngineDesc);
+            induction = new Native.InductionDesc { turboSize = new float[Native.MaxTurbos] };
+            condition = 1f;
+            var pf = enginePart != null ? enginePart.GetComponent<ES3Internal.ES3Prefab>() : null;
+            var spec = pf != null ? PartTable.Engine(pf.prefabId) : null;
+            if (spec == null) return false;
+            desc = new Native.EngineDesc { engine = spec.Params };
+            desc.fluidSteps = FluidSteps;
+            var vc = enginePart.GetComponentInParent<VehicleController>();
+            var s = SessionOf(enginePart);
+            long exhaustId = 0;
+            if (vc != null)
+            {
+                var engine = vc.powertrain.engine;
+                float limit = s != null && s.StockLimit > 0f ? s.StockLimit : engine.revLimiterRPM;
+                if (limit > 500f) desc.redlineRpm = limit;
+                if (engine.idleRPM > 100f) desc.idleRpm = engine.idleRPM;
+                var fitted = PartTable.Fitted(vc);
+                exhaustId = fitted.ExhaustId;
+                induction = InductionMachines.Describe(fitted, out _);
+                if (s != null && s.ConditionVar != null) condition = Mathf.Clamp01(s.ConditionVar.Value / 100f);
+            }
+            else
+            {
+                desc.redlineRpm = spec.Params.diesel != 0 ? 4000f : 6000f;
+                desc.idleRpm = 800f;
+            }
+            if (tune != null) { tune.Apply(ref desc); tune.ApplyInduction(ref induction); }
+            var sound = PartTable.ResolveExhaust(exhaustId, out _);
+            if (!System.IO.File.Exists(System.IO.Path.Combine(IrDirectory, sound.Ir ?? ""))) sound.Ir = null;
+            desc.exhaustIr = sound.Ir;
+            desc.exhaustFlow = sound.Flow;
+            desc.exhaustLengthM = sound.LengthM;
+            desc.headerScale = sound.HeaderScale;
+            desc.airNoise = sound.AirNoise;
+            desc.jitter = sound.Jitter;
+            return true;
+        }
+
+        // the throttle held from the Engine Tuning Toolkit's window, by engine part
+        private static readonly Dictionary<GameObject, float> HeldThrottle = new Dictionary<GameObject, float>();
+
+        public static void HoldThrottle(GameObject enginePart, float? throttle)
+        {
+            if (enginePart == null) return;
+            if (throttle.HasValue) HeldThrottle[enginePart] = throttle.Value;
+            else HeldThrottle.Remove(enginePart);
+        }
+
+        private static float Throttle(EngineSession s, float game) =>
+            s.EnginePart != null && HeldThrottle.TryGetValue(s.EnginePart, out float held) ? held : game;
+
+        // the engine's simulation, if one runs
+        public static EngineSession SessionOf(GameObject enginePart) =>
+            Instance == null || enginePart == null ? null : Instance._sessions.Values.FirstOrDefault(x => x.EnginePart == enginePart);
+
+        // an engine tuned: its simulation made again with the new tune (at the next scan)
+        public static void Retune(GameObject enginePart)
+        {
+            if (Instance == null || enginePart == null) return;
+            foreach (var kv in Instance._sessions.ToList())
+                if (kv.Value.EnginePart == enginePart) Instance.StopSession(kv.Key, "tuned");
+            Instance._nextScan = 0;
         }
 
         private void StopAll(string why)

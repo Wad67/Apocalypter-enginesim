@@ -89,6 +89,7 @@ typedef struct es_engine_params {
     float simulationFrequency;          /* physics steps per second */
     float minGasStepsPerSecond;         /* gas dynamics steps per second the cylinder size needs to stay stable */
     float airNoise, jitter;             /* synthesizer; 0 = chosen to suit the impulse response */
+    float mixture;                      /* air-fuel ratio scale on engine-sim's power mixture (lambda 0.8); 0 = 1 */
 } es_engine_params;
 
 /* An engine to simulate: its parameters, the game's idle and rev limit, and the fitted exhaust. */
@@ -166,6 +167,10 @@ ES_API const char *es_last_error(void);
 ES_API void es_set_drive_mode(es_session *s, int32_t on);
 ES_API void es_set_starter(es_session *s, int32_t on);
 ES_API void es_set_idle_rpm(es_session *s, double rpm);
+/* Variable intake cam timing on (1) or off (0): the intake cams phased with rpm and load while running. */
+ES_API void es_set_vvt(es_session *s, int32_t on);
+/* Gas dynamics sub-steps per physics step while running (quality vs CPU), kept at or above the stable floor. */
+ES_API void es_set_fluid_steps(es_session *s, int32_t steps);
 /* Engine torque at the crank, N m, smoothed over about half an engine cycle (+ = driving). */
 ES_API double es_get_torque(es_session *s);
 /* Fuel reaching the engine (0 = the tank is empty: it starves). */

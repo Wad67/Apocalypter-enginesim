@@ -85,6 +85,7 @@ namespace EngineSim
         private readonly List<Emitter> _emitters = new List<Emitter>();
         private readonly PlayMakerFSM _fsm;
         private readonly Light _flash;
+        private readonly GameObject _holder;   // the flash and the bang, on their own object at the outlet
         private readonly AudioSource _bang;
         private float _flow, _dirt, _soot, _oil, _flashLeft, _appliedExpansion = -1f;
         private Material _smokeMaterial, _flameMaterial;
@@ -167,15 +168,18 @@ namespace EngineSim
             Materials();
             if (_fsm != null) _fsm.enabled = false;
 
-            var outlet = _emitters[0].System.gameObject;
-            _flash = outlet.AddComponent<Light>();
+            // on an object of their own: the outlet may hold a light already (the game's, or a session
+            // ending this frame whose components Unity only destroys at the frame's end), and takes one
+            _holder = new GameObject("EngineSim exhaust flash");
+            _holder.transform.SetParent(_emitters[0].System.transform, false);
+            _flash = _holder.AddComponent<Light>();
             _flash.type = LightType.Point;
             _flash.color = Flame;
             _flash.range = 1.5f;   // the smoke and pipe at the outlet, not the whole vehicle
             _flash.intensity = 0f;
             _flash.enabled = false;
 
-            _bang = outlet.AddComponent<AudioSource>();
+            _bang = _holder.AddComponent<AudioSource>();
             _bang.spatialBlend = 0f;   // heard by distance (the engine's rolloff), not panned, like the engine
             _bang.playOnAwake = false;
             var pop = session.Vc.soundManager != null ? session.Vc.soundManager.exhaustPopComponent : null;
@@ -549,8 +553,7 @@ namespace EngineSim
             if (_smokeMaterial != null) Object.Destroy(_smokeMaterial);
             if (_flameMaterial != null) Object.Destroy(_flameMaterial);
             if (_fsm != null) _fsm.enabled = true;
-            if (_flash != null) Object.Destroy(_flash);
-            if (_bang != null) Object.Destroy(_bang);
+            if (_holder != null) Object.Destroy(_holder);
         }
     }
 }

@@ -46,6 +46,7 @@ int main(int argc, char **argv) {
     d.idleRpm = (float)env("ES_IDLE", d.idleRpm);
     d.engine.idleThrottlePlate = (float)env("ES_IDLE_PLATE", d.engine.idleThrottlePlate);
     d.redlineRpm = (float)env("ES_REDLINE", d.redlineRpm);
+    d.engine.mixture = (float)env("ES_MIXTURE", 0);
     d.engine.starterSpeedRpm = (float)env("ES_STARTER_SPEED", d.engine.starterSpeedRpm);
     // ES_BUILD_PSI: built for boost as the plugin does (InductionMachines.BuildFor)
     if (getenv("ES_BUILD_PSI")) {
@@ -73,6 +74,7 @@ int main(int argc, char **argv) {
     const double inertia = env("ES_INERTIA", es_get_crank_inertia(s));
     es_set_drive_mode(s, 1);
     es_set_idle_rpm(s, d.idleRpm);
+    if (getenv("ES_VVT")) es_set_vvt(s, 1);
     es_set_rev_limiter(s, d.redlineRpm, 0.08);
     if (getenv("ES_CONDITION")) es_set_condition(s, atof(getenv("ES_CONDITION")));
     printf("%s: idle %.0f, limit %.0f rpm, game inertia %.2f, sim crank inertia %.3f kg m2\n",
@@ -112,14 +114,16 @@ int main(int argc, char **argv) {
             printf("\n");
         };
         printf("full throttle, steady:\n");
-        for (double rpm = 1000; rpm <= d.redlineRpm + 1; rpm += 500) {
+        for (double rpm = env("ES_FIRST_RPM", 1000); rpm <= d.redlineRpm + 1; rpm += 500) {
             double sum = 0; int n = 0;
-            for (double t = 0; t < 4.0; t += dt) {
+            const double settle = env("ES_SETTLE", 3.5);
+            for (double t = 0; t < settle + 0.5; t += dt) {
                 es_set_target_rpm(s, rpm);
                 es_set_throttle(s, 1.0);
                 es_update(s, dt);
                 drain();
-                if (t > 3.5) { sum += es_get_torque(s); ++n; }
+                if (t > settle) { sum += es_get_torque(s); ++n; }
+                if (getenv("ES_TRACE") && n == 0 && fmod(t, 0.5) < dt) printf("    t %.1f rpm %.0f torque %.1f\n", t, es_get_rpm(s), es_get_torque(s));
             }
             report(rpm, sum / n);
         }

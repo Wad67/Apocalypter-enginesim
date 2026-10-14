@@ -14,6 +14,7 @@ const double kAirM = 0.02897;                 // kg/mol
 const double kAirR = 287.05;                  // J/(kg K)
 const double kChargeT = 298.15;               // K: no heating of the charge (as engine-sim's intake)
 const double kCpAir = 1005, kCpExhaust = 1150;
+const double kExhaustShare = 0.4;             // of the heat released, carried off by the exhaust
 const double kTwoPi = 6.283185307179586;
 
 double clamp01(double x) { return std::min(1.0, std::max(0.0, x)); }
@@ -31,7 +32,10 @@ void Induction::configure(const es_induction_desc &d, double displacementM3) {
     (void)displacementM3;
     m_superchargerSize = std::max(0.0, (double)d.superchargerSize);
     m_scDisplacement = 2.0e-3 * m_superchargerSize;
-    m_scLeak = 6.7e-5 * m_superchargerSize;
+    // leak back past the rotors, m3/s per sqrt(Pa) across: an Eaton M90 (1.5 L/rev) loses the same ~0.042 m3/s at
+    // 1.4 pressure ratio at 6000 and 14000 rotor rpm (72 and 88 % volumetric efficiency): a fixed leak, a large share
+    // of the flow when it turns slowly, so boost builds with rpm
+    m_scLeak = 2.1e-4 * m_superchargerSize;
     m_scRelief = std::max(0.0, (double)d.superchargerReliefPsi) * kPsi;   // across the blower
     m_turbos = std::min(std::max(0, (int)d.turbos), ES_MAX_TURBOS);
     double total = 0;
@@ -63,24 +67,36 @@ double Induction::compressorPr(const Turbo &t) const {
     return std::pow(1 + 0.6 * u * u / (kCpAir * kChargeT), 3.5);
 }
 
-double Induction::step(Engine *engine, double crankSpeed, double throttle, double dt) {
+double Induction::step(Engine *engine, double drawn, double crankSpeed, double throttle, double dt) {
     if (!active() || dt <= 0) { m_scPower = 0; return 0; }
 
-    // what the engine drew through its intakes this step, kg/s
-    double drawn = 0;
-    for (int i = 0; i < engine->getIntakeCount(); ++i) drawn += engine->getIntake(i)->m_flow;
+    // what the engine drew through its intakes over this step (mol, every fluid substep of it), kg/s
     const double engineFlow = drawn * kAirM / dt;
 
-    // what it pushed out of its cylinders, kg/s, and how hot (the runners' mean temperature)
-    double exhaust = 0, temperature = 0;
+    // what passes the turbines: what left through the exhaust's outlets this step, kg/s
+    double outlet = 0;
+    for (int i = 0; i < engine->getExhaustSystemCount(); ++i) outlet += engine->getExhaustSystem(i)->getLastTimestepOutletFlow();
+    const double exhaustFlow = std::max(0.0, outlet * 0.0285 / dt);
+
+    // The turbos sit on the exhaust manifold, a volume that evens the cylinders' pulses out over a cycle (a
+    // constant-pressure system): they see its mean flow (m_exhaust, below), not each pulse.
+    // And how hot, from the heat the engine released: engine-sim's gas loses nothing to the cylinder walls and
+    // ports (its exhaust runs hotter than the flame), so its temperature can't drive a turbine. The exhaust
+    // carries about 40 % of the fuel's energy at full load (Heywood: 34-45 % for a spark-ignition engine) as
+    // heat, mixed in the manifold over a cycle: heat released and exhaust flow averaged over two revolutions.
+    double burnt = 0;
     const int n = engine->getCylinderCount();
+    if ((int)m_burnt.size() != n) m_burnt.assign(n, -1.0);
     for (int i = 0; i < n; ++i) {
-        CombustionChamber *c = engine->getChamber(i);
-        exhaust += std::max(0.0, c->getLastTimestepExhaustFlow());
-        temperature += c->m_exhaustRunnerAndPrimary.temperature();
+        const double b = engine->getChamber(i)->m_nBurntFuel;
+        if (m_burnt[i] >= 0) burnt += std::max(0.0, b - m_burnt[i]);
+        m_burnt[i] = b;
     }
-    const double exhaustFlow = exhaust * 0.0285 / dt;
-    temperature = std::max(300.0, temperature / std::max(1, n));
+    const double heat = burnt * engine->getFuel()->getEnergyDensity() / dt;
+    const double mix = std::min(1.0, dt * std::max(1.0, crankSpeed) / (2.0 * kTwoPi));
+    m_heat += (heat - m_heat) * mix;
+    m_exhaust += (exhaustFlow - m_exhaust) * mix;
+    const double temperature = kChargeT + kExhaustShare * m_heat / (std::max(1.0e-4, m_exhaust) * kCpExhaust);
 
     const bool sc = m_superchargerSize > 0, turbo = m_turbos > 0;
     // The blow-off and bypass valves are worked by the pressure across the throttle: boost in the pipes
@@ -119,7 +135,7 @@ double Induction::step(Engine *engine, double crankSpeed, double throttle, doubl
             Turbo &t = m_turbo[i];
             const double share = t.size * t.size / sizes;
             // turbine: expansion across it rises with the flow forced through it
-            const double through = exhaustFlow * share * (1 - gate);
+            const double through = m_exhaust * share * (1 - gate);
             const double expansion = std::min(4.0, 1 + 1.6 * std::pow(through / t.turbineFlow, 2));
             const double turbinePower = 0.65 * through * kCpExhaust * temperature * (1 - std::pow(expansion, -0.2593));
             back += share * expansion;

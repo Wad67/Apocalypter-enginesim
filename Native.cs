@@ -61,6 +61,7 @@ namespace EngineSim
             public float simulationFrequency;
             public float minGasStepsPerSecond;
             public float airNoise, jitter;
+            public float mixture;   // air-fuel ratio scale (Engine Tuning Toolkit); 0 = as built
 
             public override string ToString()
             {
@@ -155,6 +156,12 @@ namespace EngineSim
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern void es_set_idle_rpm(IntPtr s, double rpm);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_vvt(IntPtr s, int on);
+
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void es_set_fluid_steps(IntPtr s, int steps);
 
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
         public static extern double es_get_torque(IntPtr s);

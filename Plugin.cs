@@ -23,18 +23,20 @@ namespace EngineSim
     {
         public const string GUID = "com.burner.apocalypter.enginesim";
         public const string NAME = "Engine Sim";
-        public const string VERSION = "1.6.0";
+        public const string VERSION = "1.7.0";
 
         public static ManualLogSource Log;
         public static ConfigEntry<bool> EnabledEntry;
         public static ConfigEntry<int> MaxEnginesEntry;
         public static ConfigEntry<SimQuality> QualityEntry;
+        public static ConfigEntry<bool> AutoQualityEntry;
         public static ConfigEntry<float> VolumeEntry;
         public static ConfigEntry<float> LatencyEntry;
         public static ConfigEntry<float> DistanceAttenuationEntry, DistanceScaleEntry;
         public static ConfigEntry<bool> FilterEntry;
         public static ConfigEntry<string> BackfireSoundEntry;
         public static ConfigEntry<float> FilterCrankEntry, FilterIdleEntry, FilterOpenAtEntry;
+        public static ConfigEntry<bool> TuningEntry;
         public static ConfigEntry<float> BackfireEntry, BackfireChanceEntry, ValveTickEntry, EngineRockEntry, SmokeEntry, ChassisTorqueEntry;
         public static ConfigEntry<float> WearIntensityEntry;
         public static ConfigEntry<float> IdleAirEntry;
@@ -60,7 +62,9 @@ namespace EngineSim
             Config.Bind("General", "Apocasetter", true, "Show in the Apocasetter Mods menu.");
             EnabledEntry = Config.Bind("General", "Enabled", true, "Replace the stock engine sound.");
             MaxEnginesEntry = Config.Bind("Performance", "MaxEngines", 2, new ConfigDescription("Engines simulated at once, turning ones first, then the nearest. Each uses most of a CPU core.", new AcceptableValueRange<int>(1, 8)));
-            QualityEntry = Config.Bind("Performance", "SimQuality", SimQuality.Balanced, "Gas-flow detail. Lower costs less CPU. Applies to engines started after the change.");
+            QualityEntry = Config.Bind("Performance", "SimQuality", SimQuality.Balanced, "Gas-flow detail. Lower costs less CPU. Applies to running engines at once.");
+            AutoQualityEntry = Config.Bind("Performance", "AutoQuality", true, "Lower SimQuality by itself (until the game restarts or the setting is changed) when the simulation can't keep up.");
+            QualityEntry.SettingChanged += (sender, args) => { EngineManager.QualityDrop = 0; EngineManager.ApplyQuality(); };
             VolumeEntry = Config.Bind("Audio", "Volume", 0.8f, new ConfigDescription("Engine loudness.", new AcceptableValueRange<float>(0f, 2f)));
             DistanceAttenuationEntry = Config.Bind("Audio", "DistanceAttenuation", 1f, new ConfigDescription("Fade with distance. 1 = game's rolloff, 0 = none.", new AcceptableValueRange<float>(0f, 1f)));
             DistanceScaleEntry = Config.Bind("Audio", "DistanceScale", 1f, new ConfigDescription("Scales rolloff distances. Above 1 carries further.", new AcceptableValueRange<float>(0.25f, 4f)));
@@ -81,6 +85,7 @@ namespace EngineSim
             EngineRockEntry = Config.Bind("Effects", "EngineRock", 1f, new ConfigDescription("Engine rocking on its mounts. 0 = game's shake.", new AcceptableValueRange<float>(0f, 3f)));
             SmokeEntry = Config.Bind("Effects", "ExhaustSmoke", 1f, new ConfigDescription("Exhaust smoke amount. 0 = game's smoke.", new AcceptableValueRange<float>(0f, 3f)));
             ChassisTorqueEntry = Config.Bind("Effects", "ChassisTorque", 1f, new ConfigDescription("Engine torque reaction on the body. 0 = off.", new AcceptableValueRange<float>(0f, 5f)));
+            TuningEntry = Config.Bind("Effects", "TuningKit", true, "The Engine Tuning Toolkit: per-engine timing, cams, idle and limiter.");
             BindExperimental();
             var harmony = new Harmony(GUID);
             harmony.PatchAll(typeof(InductionSound));   // works without the native library
@@ -95,6 +100,7 @@ namespace EngineSim
             }
             EngineManager.IrDirectory = Path.Combine(dir, "ir");
             PartTable.Init(Paths.ConfigPath);
+            Tunes.Init(Paths.ConfigPath);
 
             harmony.PatchAll(typeof(ResPatch));
             harmony.PatchAll(typeof(ResActivePatch));
@@ -110,6 +116,7 @@ namespace EngineSim
             _runner.hideFlags = HideFlags.HideAndDontSave;
             DontDestroyOnLoad(_runner);
             _runner.AddComponent<EngineManager>();
+            _runner.AddComponent<TuningKit>();
             FsmDump.Init();
 
             Log.LogInfo(NAME + " " + VERSION + " loaded.");
@@ -156,7 +163,7 @@ namespace EngineSim
             BaseNoiseEntry = Config.Bind(S, "BaseAirNoise", 0f, new ConfigDescription("Air noise. 0 = automatic.", new AcceptableValueRange<float>(0f, 1f)));
             BaseJitterEntry = Config.Bind(S, "BaseJitter", 0f, new ConfigDescription("Pulse-timing jitter. 0 = automatic.", new AcceptableValueRange<float>(0f, 1f)));
 
-            foreach (var e in new ConfigEntryBase[] { BaseIrEntry, BaseFlowEntry, BasePipeEntry, BaseHeaderEntry, BaseNoiseEntry, BaseJitterEntry, QualityEntry })
+            foreach (var e in new ConfigEntryBase[] { BaseIrEntry, BaseFlowEntry, BasePipeEntry, BaseHeaderEntry, BaseNoiseEntry, BaseJitterEntry })
                 e.ConfigFile.SettingChanged += (sender, args) => { if (args.ChangedSetting == e) RestartRequested = true; };
         }
 

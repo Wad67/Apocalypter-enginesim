@@ -27,6 +27,12 @@ namespace EngineSim
         // the coupled engines, for the start / stop patches
         internal static readonly Dictionary<EngineComponent, DriveCoupling> Active = new Dictionary<EngineComponent, DriveCoupling>();
 
+        // the key and starter held from the Engine Tuning Toolkit's window, by engine
+        internal static readonly Dictionary<EngineComponent, (bool Key, bool Crank)> Held = new Dictionary<EngineComponent, (bool, bool)>();
+
+        // the key as the coupling has it (null: not coupled)
+        public static bool? KeyOf(EngineComponent engine) => Active.TryGetValue(engine, out var c) ? c.KeyOn : (bool?)null;
+
         private readonly EngineSession _session;
         private readonly EngineComponent _engine;
         private readonly EngineComponent.CalculateTorque _vanilla, _ours;
@@ -87,6 +93,9 @@ namespace EngineSim
             if (!Switches.TryGetValue(vc, out fsm)) Switches[vc] = fsm = IgnitionSwitch.FindFsm(vc);
             return engine.ignition || IgnitionSwitch.IsOn(fsm);
         }
+
+        // the idle speed: the game's, and the idle screw's turn (Engine Tuning Toolkit)
+        private float Idle => _engine.idleRPM + (_session.Tune != null ? _session.Tune.Idle : 0f);
 
         public DriveCoupling(EngineSession session)
         {
@@ -165,7 +174,7 @@ namespace EngineSim
             }
             if (_partGone)
             {
-                _session.SetDrive(false, true, _engine.idleRPM);
+                _session.SetDrive(false, true, Idle);
                 return;
             }
 
@@ -186,6 +195,8 @@ namespace EngineSim
             if (_switch != null && Time.timeScale > 0.001f) _switch.Update();
             if (_switch != null) _key = _switch.On;
             bool crank = _switch != null && _switch.Cranking;
+            // the Engine Tuning Toolkit's key and starter, while its window is open on this engine
+            if (Held.TryGetValue(_engine, out var held)) { _key = held.Key; crank = held.Crank; }
             if (crank && !_cranking) StartStarter();
             else if (!crank && _cranking) StopStarter();
             _cranking = crank;
@@ -203,7 +214,7 @@ namespace EngineSim
             }
             LogStats();
 
-            _session.SetDrive(_cranking, fuel, _engine.idleRPM);
+            _session.SetDrive(_cranking, fuel, Idle);
         }
 
         private bool HasFuel()

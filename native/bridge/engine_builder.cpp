@@ -446,7 +446,9 @@ bool buildEngine(const es_engine_desc &d, const std::string &irDirectory, BuiltE
     ip.InputFlowK = GasSystem::k_carb(p.intakeFlowCfm);
     ip.IdleFlowK = 0.0;
     ip.RunnerFlowRate = GasSystem::k_carb(p.runnerFlowCfm);
-    ip.MolecularAfr = 25.0 / 2.0;
+    // engine-sim's mixture: 12.5 O2 per C8H18 at lambda 0.8 (its intake supplies 0.8 of this as air), scaled by
+    // the mixture screw (Engine Tuning Toolkit): leaner above 1, richer below
+    ip.MolecularAfr = 25.0 / 2.0 * (p.mixture > 0 ? p.mixture : 1.0);
     ip.IdleThrottlePlatePosition = p.idleThrottlePlate;
     ip.RunnerLength = units::distance(p.runnerLengthMm, units::mm);
     ip.VelocityDecay = p.intakeVelocityDecay;

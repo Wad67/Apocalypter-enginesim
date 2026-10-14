@@ -125,6 +125,12 @@ namespace EngineSim
         // engine temperature for starting, 0 cold .. 1 warm (drive mode; the game's oil temperature)
         public void SetHeat(float heat) { Volatile.Write(ref _heat, Mathf.Clamp01(heat)); }
 
+        // the Engine Tuning Toolkit's tune on this engine (null: as built)
+        public Tune Tune;
+        private int _fluidSteps, _fluidStepsApplied;
+        public int FluidSteps { set { Volatile.Write(ref _fluidSteps, value); } }   // quality, changed while running
+        public float StockLimit;   // the game engine's own rev limit, while the tune moves it (0: not moved)
+
         public EngineSession(RealisticEngineSound res, VehicleController vc, string partName, FittedParts parts, float loudness,
             Native.EngineDesc desc, string irDir, AudioMixerGroup mixer, bool drive, float driveTorqueScale, float peakTorque)
         {
@@ -267,6 +273,9 @@ namespace EngineSim
                         }
                     }
                     Native.es_set_idle_air(session, Plugin.IdleAirEntry.Value);
+                    Native.es_set_vvt(session, Tune != null && Tune.Vvt ? 1 : 0);
+                    int steps = Volatile.Read(ref _fluidSteps);
+                    if (steps > 0 && steps != _fluidStepsApplied) { Native.es_set_fluid_steps(session, steps); _fluidStepsApplied = steps; }
                     Native.es_set_lowpass(session, Plugin.FilterEntry.Value ? Plugin.FilterCrankEntry.Value : 0f, Plugin.FilterIdleEntry.Value,
                         Plugin.FilterOpenAtEntry.Value, Drive ? Volatile.Read(ref _idleRpm) : Desc.idleRpm);
                     Native.es_set_effects(session, Plugin.BackfireEntry.Value, Plugin.BackfireChanceEntry.Value, Plugin.ValveTickEntry.Value);

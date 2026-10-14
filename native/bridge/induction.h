@@ -3,6 +3,8 @@
 
 #include "enginesim_api.h"
 
+#include <vector>
+
 class Engine;
 
 // Forced induction as machines on the simulated engine (drive mode), instead of a pressure handed in:
@@ -32,7 +34,7 @@ public:
     double inletPressure() const { return m_p2; }
     // after it: the engine's crank speed (rad/s), its throttle, and the air it drew and exhaust it
     // pushed out this step (mol); returns the supercharger's drag on the crank, N m
-    double step(Engine *engine, double crankSpeed, double throttle, double dt);
+    double step(Engine *engine, double drawnMol, double crankSpeed, double throttle, double dt);
 
     double boostPa() const { return m_p2 - kAmbient; }
     double turboSpeed(int i) const { return i < m_turbos ? m_turbo[i].omega / m_turbo[i].omegaMax : 0; }
@@ -53,6 +55,8 @@ private:
     double compressorPr(const Turbo &t) const;
 
     double m_superchargerSize = 0, m_scDisplacement = 0, m_scRelief = 0, m_scLeak = 0;
+    std::vector<double> m_burnt;              // each chamber's fuel burnt so far, kg
+    double m_heat = 0, m_exhaust = 0;         // heat released (W) and exhaust flow (kg/s), over a cycle
     Turbo m_turbo[ES_MAX_TURBOS];
     int m_turbos = 0;
     double m_wastegate = 0;

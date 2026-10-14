@@ -111,6 +111,9 @@ struct es_session {
     double torque = 0;             // cycle-smoothed engine torque at the crank, N m (+ = driving)
     double rawTorque = 0;          // engine torque at the crank, this frame's average (no cycle smoothing)
     double redlineRpm = 6000;
+    bool vvt = false;              // variable intake cam timing (es_set_vvt)
+    es_engine_desc desc{};         // as created (es_set_fluid_steps keeps the stability floor it gives)
+    double vvtPhase = 0;           // the intake cams' phase now, crank degrees advanced from as built
     Effects effects;               // backfires, valve tick, low-rpm filter
     Induction induction;           // superchargers and turbos as machines (drive mode, es_set_induction)
     double inductionDrag = 0;      // the supercharger's drag on the crank over the last update, N m
@@ -326,6 +329,7 @@ ES_API es_session *es_create(const es_engine_desc *desc, const char *irDirectory
     s->simulator = engine->createSimulator(s->built.vehicle, s->built.transmission);
     s->simulator->setSimulationFrequency((int)engine->getSimulationFrequency());
     // gas dynamics sub-steps per physics step: the biggest single cost (engine-sim uses 8)
+    s->desc = *desc;
     static_cast<PistonEngineSimulator *>(s->simulator)->setFluidSimulationSteps(
         stableFluidSteps(*desc, engine->getSimulationFrequency(), (desc->fluidSteps > 0) ? (int)desc->fluidSteps : 8));
 
@@ -416,6 +420,35 @@ ES_API void es_set_volume(es_session *s, double volume) {
 //  under throttle, cut the sparks and let the held rpm fall ~4 %, then refire
 //  and climb back: the bounce of a real ignition-cut limiter (~8-12 Hz).
 // ---------------------------------------------------------------------
+// Variable intake cam timing: an oil-pressure phaser moving the intake cams at up to 150 crank degrees a second
+// towards a map: under load 30 degrees advanced up to 45 % of the limit (earlier closing: more low-end torque,
+// as the engines here measure), as built at 80 %, 10 degrees retarded at the limit (later closing for top end);
+// at a closed throttle and idle as built.
+static void updateVvt(es_session *s, Engine *engine, double dt) {
+    double target = 0;
+    if (s->vvt && s->redlineRpm > 0) {
+        const double x = engine->getRpm() / s->redlineRpm;
+        const double map = x <= 0.45 ? 30.0 : x <= 0.8 ? 30.0 * (0.8 - x) / 0.35 : -10.0 * std::min(1.0, (x - 0.8) / 0.2);
+        const double load = std::min(1.0, std::max(0.0, (s->throttle - 0.15) / 0.45));
+        target = map * load;
+    }
+    const double step = 150.0 * dt;
+    s->vvtPhase += std::max(-step, std::min(step, target - s->vvtPhase));
+    for (int i = 0; i < engine->getCylinderBankCount(); ++i) {
+        Camshaft *cam = engine->getHead(i)->getIntakeCamshaft();
+        if (cam != nullptr) cam->setAdvance(-s->vvtPhase * units::deg);   // the cam's own advance runs the other way
+    }
+}
+
+ES_API void es_set_vvt(es_session *s, int32_t on) { if (s != nullptr) s->vvt = on != 0; }
+
+// quality while running: the gas sub-steps are read every step, so they change from the next one
+ES_API void es_set_fluid_steps(es_session *s, int32_t steps) {
+    if (s == nullptr || s->simulator == nullptr || steps <= 0) return;
+    static_cast<PistonEngineSimulator *>(s->simulator)->setFluidSimulationSteps(
+        stableFluidSteps(s->desc, s->built.engine->getSimulationFrequency(), steps));
+}
+
 static bool updateLimiter(es_session *s, double dt) {
     const double drop = 0.04;
     const bool atLimit = s->revLimitRpm > 0 && s->targetRpm >= 0.985 * s->revLimitRpm && s->throttle > 0.1 && s->ignition;
@@ -578,16 +611,23 @@ ES_API int32_t es_update(es_session *s, double dt) {
         // engine torque: the dyno's, averaged over this frame's physics steps, smoothed over half a cycle
         double sum = 0, drag = 0;
         int steps = 0;
-        sim->startFrame(dt);
+        updateVvt(s, engine, dt);
+    sim->startFrame(dt);
         const double wear = effectiveWear(s);
         const double stepDt = 1.0 / sim->getSimulationFrequency();
+        // the intakes' flow, summed over the frame's fluid substeps as the engine runs them
+        auto intakeTotal = [&]() { double f = 0; for (int i = 0; i < engine->getIntakeCount(); ++i) f += engine->getIntake(i)->m_flowRate; return f; };
+        double drawnBefore = intakeTotal();
         while (sim->simulateStep()) {
+            const double drawnNow = intakeTotal();
+            const double drawn = drawnNow - drawnBefore;
+            drawnBefore = drawnNow;
             sum += sim->m_dyno.getTorque();
             ++steps;
             s->effects.step(engine, engine->getRpm(), s->redlineRpm, wear);
             if (machines) {
                 // the charge pressure follows what the compressors deliver against what the engine drew
-                drag += s->induction.step(engine, units::rpm(std::max(0.0, s->targetRpm)), throttle, stepDt);
+                drag += s->induction.step(engine, drawn, units::rpm(std::max(0.0, s->targetRpm)), throttle, stepDt);
                 for (int i = 0; i < engine->getIntakeCount(); ++i) engine->getIntake(i)->m_inletPressure = s->induction.inletPressure();
                 for (int i = 0; i < engine->getExhaustSystemCount(); ++i) engine->getExhaustSystem(i)->m_outletPressure = s->induction.exhaustPressure();
             }
@@ -627,6 +667,7 @@ ES_API int32_t es_update(es_session *s, double dt) {
     sim->m_dyno.m_hold = true;
     sim->m_dyno.m_rotationSpeed = units::rpm(std::max(0.0, s->targetRpm * (1.0 + s->hunt) * (1.0 - s->stumble) * (1.0 - s->limiterDrop)));
 
+    updateVvt(s, engine, dt);
     sim->startFrame(dt);
     double sum = 0;
     int steps = 0;
