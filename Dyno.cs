@@ -57,6 +57,10 @@ namespace EngineSim
             return new Dyno(desc, induction, condition, tune != null && tune.Vvt);
         }
 
+        // the engine as new at 1 atm (no machines), for its peak torque
+        public static Dyno Peak(Native.EngineDesc desc) =>
+            new Dyno(desc, new Native.InductionDesc { turboSize = new float[Native.MaxTurbos] }, 1f, false);
+
         public void Cancel() { _cancel = true; }
 
         private void Work(Native.EngineDesc desc, Native.InductionDesc induction, float condition)

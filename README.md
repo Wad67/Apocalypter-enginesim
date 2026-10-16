@@ -117,7 +117,8 @@ simulated engines (`MaxEngines`, nearest first) are driven this way.
   a finished one may not catch. Warmth is the game's oil temperature. The starter cranks at a realistic speed,
   dims the lights, and held against more than it can turn (in gear, clutch out) it gives up and only clicks.
 - **Clutch.** The clutch holds at least 2.5 times the engine's peak torque, whatever the game's condition-scaled
-  figure says. A vehicle that sets a stronger clutch of its own keeps it. In gear the engine turns on its own
+  figure says. An engine whose table gives no `peak_torque` has it measured once by a dyno pull in the background
+  (the log gives the figure to put in its table). A vehicle that sets a stronger clutch of its own keeps it. In gear the engine turns on its own
   inertia, loaded by the torque it passes through the clutch: held, its momentum goes into the drivetrain and a
   heavy enough load (first gear against a stopped car, reverse at speed) pulls it down to a stall; slipping, it
   is dragged by the clutch's friction torque, and its revs fall into the next gear on a shift. The game's model

@@ -185,6 +185,7 @@ namespace EngineSim
             // condition, down to a clutch that transmits a few N m): at least that, even if the game
             // lowers it again. A vehicle that sets a stronger clutch of its own keeps it.
             var clutchPart = _session.Vc.powertrain.clutch;
+            _session.MeasurePeak();
             if (_session.ClutchTorque > 0f && clutchPart.slipTorque < _session.ClutchTorque) clutchPart.slipTorque = _session.ClutchTorque;
             if (!_inertiaSet && _session.CrankInertia > 0f)
             {

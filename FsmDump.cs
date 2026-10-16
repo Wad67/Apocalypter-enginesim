@@ -82,6 +82,8 @@ namespace EngineSim
                     foreach (var t in st.Transitions) sb.Append("  [").Append(t.EventName).Append(" -> ").Append(t.ToState).Append(']');
                     sb.Append('\n');
                     FsmStateAction[] actions;
+                    // a state not tied to its FSM yet (a menu's, before it starts): loading its actions only logs errors
+                    if (st.Fsm == null) { sb.Append("    (actions not loaded: the FSM hasn't started)\n"); continue; }
                     try { actions = st.Actions; }
                     catch (Exception e) { sb.Append("    (actions not loaded: ").Append(e.Message).Append(")\n"); continue; }
                     foreach (var a in actions)

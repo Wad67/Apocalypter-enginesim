@@ -24,7 +24,7 @@ namespace EngineSim
     {
         public const string GUID = "com.burner.apocalypter.enginesim";
         public const string NAME = "Engine Sim";
-        public const string VERSION = "1.8.0";
+        public const string VERSION = "1.8.1";
 
         public static ManualLogSource Log;
         public static ConfigEntry<bool> EnabledEntry;

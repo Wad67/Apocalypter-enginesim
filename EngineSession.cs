@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -47,8 +48,12 @@ namespace EngineSim
         // drive mode ([Experimental] simulated drivetrain): the engine powers the game's drivetrain
         public readonly bool Drive;
         private readonly float _driveTorqueScale;
-        // the clutch the engine needs, N m (drive mode; 0 = leave the game's)
-        public readonly float ClutchTorque;
+        // the clutch the engine needs, N m (drive mode; 0 = leave the game's): 2.5 x its peak torque. An engine whose
+        // table gives no peak_torque has it measured, once a game, by a dyno pull of the engine as new at 1 atm; until
+        // then the game's clutch stays (sized from the game's power figure, which falls with condition)
+        public float ClutchTorque { get { return 2.5f * PeakTorque * _driveTorqueScale; } }
+        private Dyno _peakPull;
+        private static readonly Dictionary<long, float> Measured = new Dictionary<long, float>();
         private int _starter, _fuel = 1;
         private float _idleRpm;
         private float _torque, _crankInertia, _starterLoad, _rawTorque;
@@ -87,8 +92,34 @@ namespace EngineSim
         public float CrankInertia { get { return Volatile.Read(ref _crankInertia); } }
         // engine torque over the sim's last update, N m, unsmoothed (the engine rocking on its mounts)
         public float RawTorque { get { return Volatile.Read(ref _rawTorque); } }
-        public float PeakTorque { get { return _peakTorque; } }
-        private readonly float _peakTorque;
+        public float PeakTorque { get { return Volatile.Read(ref _peakTorque); } }
+        private float _peakTorque;
+
+        // main thread: the peak pull's result, when there is one
+        public void MeasurePeak()
+        {
+            if (_peakTorque > 0f || !Drive) return;
+            lock (Measured)
+                if (Measured.TryGetValue(EngineId, out float known)) { Volatile.Write(ref _peakTorque, known); return; }
+            if (_peakPull == null)
+            {
+                _peakPull = Dyno.Peak(Desc);   // as fitted, tune included
+                Plugin.Log.LogInfo(PartName + ": no peak_torque in its table; measuring it for the clutch");
+                return;
+            }
+            if (!_peakPull.Finished) return;
+            float peak = 0f;
+            for (int i = 0; i < _peakPull.Torque.Length; i++) if (_peakPull.Ready[i]) peak = Mathf.Max(peak, _peakPull.Torque[i]);
+            if (_peakPull.Error != null || peak <= 0f)
+            {
+                Plugin.Log.LogWarning(PartName + ": its peak torque couldn't be measured (" + (_peakPull.Error ?? "no torque") + "); the game's clutch stays");
+                peak = -1f;   // not again
+            }
+            else Plugin.Log.LogInfo(PartName + ": peak torque " + peak.ToString("0") + " N m measured (put peak_torque = " + peak.ToString("0") + " in its table to skip this)");
+            lock (Measured) Measured[EngineId] = peak;
+            Volatile.Write(ref _peakTorque, peak);
+            _peakPull = null;
+        }
         public int TakeBackfires() { return Interlocked.Exchange(ref _backfires, 0); }
         // exhaust over the sim's last update: flow out of the cylinders (mol/s) and its unburnt fuel fraction
         public float ExhaustFlow { get { return Volatile.Read(ref _exhaustFlow); } }
@@ -136,7 +167,6 @@ namespace EngineSim
         {
             Drive = drive;
             _driveTorqueScale = driveTorqueScale;
-            ClutchTorque = 2.5f * peakTorque * driveTorqueScale;
             _peakTorque = peakTorque;
             Res = res;
             Vc = vc;
