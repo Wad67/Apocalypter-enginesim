@@ -32,9 +32,6 @@ namespace EngineSim
         // the torque passed in the last step, N m at b
         public float Torque { get; private set; }
 
-        // motor torque on free wheels from all couplings, this step
-        private static readonly Dictionary<WheelController, float> Motor = new Dictionary<WheelController, float>();
-        private static float _step = -1f;
         private float _nextLog;
 
         private void OnEnable() { StartCoroutine(Run()); }
@@ -42,8 +39,8 @@ namespace EngineSim
         private void OnDisable()
         {
             Torque = 0f;
-            Release(a);
-            Release(b);
+            WheelTorque.Release(this, a);
+            WheelTorque.Release(this, b);
         }
 
         private IEnumerator Run()
@@ -58,17 +55,9 @@ namespace EngineSim
 
         private void Step(float dt)
         {
-            // a new physics step: last step's motor torques start again from nothing
-            if (Time.fixedTime != _step)
-            {
-                _step = Time.fixedTime;
-                foreach (var w in Motor.Keys)
-                    if (w != null && w.AutoSimulate) w.MotorTorque = 0f;
-                Motor.Clear();
-            }
             if (a == null || b == null || !a.isActiveAndEnabled || !b.isActiveAndEnabled || a.wheel == null || b.wheel == null || dt <= 0f) return;
             float e = Mathf.Clamp01(engagement);
-            float ia = Mathf.Max(1e-4f, a.Inertia), ib = Mathf.Max(1e-4f, b.Inertia);
+            float ia = WheelTorque.InertiaOf(a), ib = WheelTorque.InertiaOf(b);
             float slip = ratio * a.wheel.angularVelocity - b.wheel.angularVelocity;
             // the torque at b that would leave both at one speed after a step
             float t = slip / (dt * (ratio * ratio / ia + 1f / ib));
@@ -79,8 +68,8 @@ namespace EngineSim
             }
             else if (e <= 0f) t = 0f;
             Torque = t;
-            Apply(b, t, ib, dt);
-            Apply(a, -ratio * t, ia, dt);
+            WheelTorque.Set(this, b, t, dt);
+            WheelTorque.Set(this, a, -ratio * t, dt);
             if (Plugin.VerboseLogEntry.Value && Time.unscaledTime >= _nextLog && (e > 0f || Mathf.Abs(slip) > 1f))
             {
                 _nextLog = Time.unscaledTime + 5f;
@@ -94,22 +83,66 @@ namespace EngineSim
                     + ", motor " + b.MotorTorque.ToString("0") + " N m, road force " + b.forwardFriction.force.ToString("0") + " N");
             }
         }
+    }
+}
 
-        private static void Apply(WheelController w, float torque, float inertia, float dt)
+namespace EngineSim
+{
+    // Torque on a wheel from outside the game's drivetrain (a belt, a coupling, a generator). Each source owns its share of
+    // a wheel's torque and sets it again every step it acts (whenever in the step that is: a coupling after the physics
+    // step, a generator during it); a free wheel (the game's drivetrain doesn't step it) takes the sum as motor torque, a
+    // driven one each share as the change of speed it makes over the step, at the wheel's inertia. A source switched off
+    // takes its share back (Release).
+    public static class WheelTorque
+    {
+        private static readonly Dictionary<WheelController, Dictionary<object, float>> Shares = new Dictionary<WheelController, Dictionary<object, float>>();
+
+        public static void Set(object owner, WheelController w, float torque, float dt)
         {
+            if (w == null || w.wheel == null || owner == null) return;
             if (w.AutoSimulate)
             {
-                float sum;
-                Motor.TryGetValue(w, out sum);
-                Motor[w] = sum + torque;
-                w.MotorTorque = sum + torque;
+                if (!Shares.TryGetValue(w, out var shares)) Shares[w] = shares = new Dictionary<object, float>();
+                shares[owner] = torque;
+                float sum = 0f;
+                foreach (var v in shares.Values) sum += v;
+                w.MotorTorque = sum;
             }
-            else w.wheel.angularVelocity += torque / inertia * dt;
+            else
+            {
+                Release(owner, w);   // driven now: its motor torque is the drivetrain's
+                w.wheel.angularVelocity += torque / InertiaOf(w) * dt;
+            }
         }
 
-        private static void Release(WheelController w)
+        public static void Release(object owner, WheelController w)
         {
-            if (w != null && w.AutoSimulate && Motor.Remove(w)) w.MotorTorque = 0f;
+            if (w == null || owner == null || !Shares.TryGetValue(w, out var shares) || !shares.Remove(owner)) return;
+            if (w.AutoSimulate)
+            {
+                float sum = 0f;
+                foreach (var v in shares.Values) sum += v;
+                w.MotorTorque = sum;
+            }
+            if (shares.Count == 0) Shares.Remove(w);
+        }
+
+        // The inertia a torque from outside turns the wheel against. The game sets a driven wheel's to its own plus
+        // the drivetrain's behind it, and in neutral that still counts the engine's and clutch's, which a gearbox
+        // in neutral doesn't connect: then it is the wheel's own (its base inertia, else half its mass by its
+        // radius squared, a disc).
+        private static readonly Dictionary<WheelController, NWH.VehiclePhysics2.VehicleController> Vehicles = new Dictionary<WheelController, NWH.VehiclePhysics2.VehicleController>();
+        public static float InertiaOf(WheelController w)
+        {
+            if (w == null) return 1e-4f;
+            if (!Vehicles.TryGetValue(w, out var vc) || (vc == null && !ReferenceEquals(vc, null))) Vehicles[w] = vc = w.GetComponentInParent<NWH.VehiclePhysics2.VehicleController>();
+            bool neutral = vc != null && vc.powertrain != null && vc.powertrain.transmission != null && vc.powertrain.transmission.Gear == 0;
+            if (!w.AutoSimulate && neutral)
+            {
+                float own = w.wheel.baseInertia > 1e-6f ? w.wheel.baseInertia : 0.5f * w.Mass * w.Radius * w.Radius;
+                return Mathf.Max(1e-4f, own);
+            }
+            return Mathf.Max(1e-4f, w.Inertia);
         }
     }
 }

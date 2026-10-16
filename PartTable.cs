@@ -216,7 +216,7 @@ default              = -, 0.95, 0.25, 1.0, 0.85
         // Writes the defaults if the file is missing. A file in an older format (exhaust profiles were
         // matched by part name before format 6, engines had one line each in format 1) is kept as .old
         // and replaced.
-        private static void Prepare(string path, string header, string defaults)
+        internal static void Prepare(string path, string header, string defaults)
         {
             if (File.Exists(path))
             {
@@ -482,5 +482,11 @@ default              = -, 0.95, 0.25, 1.0, 0.85
             s.HeaderScale = Math.Min(1f, Math.Max(0.5f, s.HeaderScale));
             return s;
         }
+    }
+
+    // for live code: a config table written with its defaults when missing or in an older format (kept as .old)
+    public static class TableFiles
+    {
+        public static void Prepare(string path, string header, string defaults) => PartTable.Prepare(path, header, defaults);
     }
 }

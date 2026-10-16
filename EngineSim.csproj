@@ -37,11 +37,13 @@
     <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(ManagedDir)/UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(ManagedDir)/UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="PlayMaker"><HintPath>$(ManagedDir)/PlayMaker.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="SigmaMod"><HintPath>$(GameDir)/BepInEx/plugins/SigmaMod/SigmaMod.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="NWH.Common"><HintPath>$(ManagedDir)/NWH.Common.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="NWH.WheelController"><HintPath>$(ManagedDir)/NWH.WheelController.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="native/**" />
+    <Compile Remove="live/**" />
   </ItemGroup>
   <Target Name="DeployToGame" AfterTargets="Build">
     <Copy SourceFiles="$(OutDir)$(AssemblyName).dll;icon.png" DestinationFolder="$(DeployDir)" />

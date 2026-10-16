@@ -242,6 +242,7 @@ namespace EngineSim
                 if (vc == null || !vc.isActiveAndEnabled || vc.powertrain == null || vc.powertrain.engine == null) continue;
                 var engine = vc.powertrain.engine;
                 if (engine.engineType != EngineComponent.EngineType.ICE) continue;
+                if (HandCranks.Coupled(engine)) continue;   // a person turning a handle: nothing to simulate or hear
 
                 // turning, or the key on: first in line
                 if (engine.IsRunning || engine.starterActive || engine.OutputRPM > 50f

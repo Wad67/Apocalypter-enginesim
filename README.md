@@ -71,7 +71,7 @@ window that looks like Windows 95 (the mouse is yours while it is open):
 | Air filter | -20 to +30 % | clogged, to an open element |
 | Throttle linkage | x0.5 to x2 | the pedal-to-plate curve: below 1 sharper, above 1 progressive |
 | Idle speed | -300 to +500 rpm | the idle screw |
-| Rev limiter | -1500 to +1000 rpm | where the ignition cuts out |
+| Rev limiter | -1500 to +3000 rpm | where the ignition cuts out |
 | Limiter cut | up to 0.3 s | how long it cuts for: a soft or a hard limiter |
 | Wastegate | -6 to +10 psi | the turbos' boost (its spring, or a boost controller); only with turbos fitted |
 | Blower pulley | -20 to +30 % | how fast the supercharger is driven; only with one fitted |
@@ -135,6 +135,33 @@ simulated engines (`MaxEngines`, nearest first) are driven this way.
 - With `Match game power` (on), each engine's torque is scaled to the game's rated power (`drive_torque_scale`
   in `EngineSim.engines.cfg`).
 
+### The foot crank
+
+An "engine" that is a pedal crank (needs SigmaMod; found where 2.8 L V6s are). Fit it like an engine and turn it by
+hand: hold the left button on it, or sit in the vehicle and use the throttle. A person makes about 60 N m held still,
+nothing at 160 rpm, at most about 250 W at half that, and grunts harder the closer to their limit they push. It drives
+the vehicle through the clutch and gears like any engine, loaded by what it turns; it has no idle, no starter and no
+sound of its own.
+
+### ⚠ Experimental: electrics
+
+Off by default (`Experimental.Electrics`). On, generator sets go into the game's camps: one at the starter camp,
+whose two hanging tin-can lights become electric lamps, and one in place of each decorative generator in the camps and
+buildings that have them. Off, the world is as the game has it, and the generator set is only an item.
+
+- **The generator set** (needs SigmaMod): an engine mount, radiator, fuel tank, ignition, throttle lever and belt
+  clutch on a fixed frame, belted from the crank pulley to a DC dynamo. The belt grips up to its tension and slips
+  past it; the dynamo loads the engine as much as its lamps draw. Clicking the dynamo switches a governor on and off:
+  on, it holds the engine at 2200 rpm (the throttle lever raises it to 3000) against the load, as a flyweight governor
+  does. Hovering it shows its condition, volts, amps and watts, and the governor. The repair box works on it, and it
+  wears with the current it delivers.
+- **The dynamo** gives a voltage with its speed, capped by its regulator (a 24 V system here); a capacitor across it
+  smooths the dips. Worn brushes raise its resistance.
+- **The lamps** are 24 V tungsten globes (500 W: a heavy load, so the engine feels them) on copper wiring from the nearest generator within 60 m: current goes
+  as the voltage to the 0.55, light as the voltage to the 3.4, and far lamps lose a little to their wiring. A stopped
+  generator's lamps are dark; a shot-out lamp is off the circuit. Which of the game's lamps are electric, and their
+  rating, is `BepInEx/config/EngineSim.lamps.cfg` (a lamp's glass mesh by its Easy Save id).
+
 ## Parts for building vehicles
 
 Components a vehicle can carry (added by a vehicle mod, e.g. from a SigmaMod `.json`). They work with or
@@ -158,6 +185,18 @@ without the simulated drivetrain.
   meshes take `friction` (0.5, steel on dirt) whenever the tyre model isn't gripping.
 - Wheels without suspension travel (`spring.maxLength` 0, a solid axle): when a bigger wheel goes on, the
   vehicle is lifted by as much as the wheel would sink into the ground, instead of burying it.
+- In `EngineSim/live/EngineSimLive.dll` (live code: reloadable with SigmaMod's `Dev.LiveCode`):
+  - `EngineSim.CrankBelt`: a belt from the engine's crank pulley to a wheel `b` (`radiusA`, `radiusB`, `capacity`,
+    `engagement`; `enginePulley` turns with the crank). It grips up to its capacity and slips past it, loading the crank.
+  - `EngineSim.DcGenerator`: a dynamo braking its pulley's `wheel` (`volts` regulator, `amps` limit, `emf` volts per
+    1000 rpm, `resistance`, `friction`, `capacitance`, `reach`, `wire` ohm per metre, `wear` % per amp-hour). Exposes
+    `Volts`, `Amps`, `Watts`, `Rpm` and texts for a readout.
+  - `EngineSim.Governor`: a flyweight governor on the throttle (`rpm`, `maxRpm`, `droop`, `lag`, `lever`, `toggle`).
+- An ignition key can be a component of the vehicle's own instead of the game's switch: anything with `KeyOn` and
+  `Cranking` (bool properties) and an `external` field. The simulated drivetrain sets `external` and works the engine
+  from it (SigmaMod's `KeySwitch` is one).
+- Torque put on a wheel from outside the drivetrain (couplings, belts, a dynamo) goes through `EngineSim.WheelTorque`:
+  each source owns its share of a wheel's torque.
 
 ### Loads on the crankshaft (for other mods)
 
@@ -178,8 +217,8 @@ It works with or without the simulated drivetrain. Apoc-Air's propellers use it.
 - Apocalypter with [BepInEx 5](https://github.com/BepInEx/BepInEx/releases) (x64).
 - A reasonably modern CPU. Each simulated engine runs on its own thread and uses most of a core;
   `MaxEngines` (default 2) limits how many run at once.
-- [SigmaMod](https://github.com/Wad67/Apocalypter-sigmamod) for the Engine Tuning Toolkit (the item). Without it
-  everything else works.
+- [SigmaMod](https://github.com/Wad67/Apocalypter-sigmamod) 2.0 or later for the items: the Engine Tuning Toolkit,
+  the foot crank and the generator set (Lua assets in `sigma_assets`). Without it everything else works.
 
 ## Installation
 
@@ -191,6 +230,8 @@ BepInEx\plugins\EngineSim\
     enginesim_native.dll     engine-sim and the engine builder (native, x64)
     icon.png
     ir\*.wav                 exhaust impulse responses
+    live\EngineSimLive.dll   the electrics (loaded by SigmaMod)
+    sigma_assets\            the items (SigmaMod)
 ```
 
 ## Settings
@@ -227,6 +268,7 @@ BepInEx\plugins\EngineSim\
 | Effects | `TuningKit` | on | The Engine Tuning Toolkit. |
 | Experimental | `⚠ Simulated drivetrain ⚠` | `false` | The simulated engine powers the vehicle. |
 | Experimental | `Match game power` | `true` | Scale its torque to the game's rated power. |
+| Experimental | `Electrics` | `false` | Generator sets in camps power their electric lamps. Restart to apply. |
 | Experimental | `Hard starting` | `1` | 0 = every charge lights from the first turn. |
 | Experimental | `Starter gives up` | `true` | An overloaded starter only clicks. |
 | Debug | `VerboseLog` | `false` | Engine and exhaust identification, live statistics and part details in `LogOutput.log`. |
@@ -330,6 +372,7 @@ test tool.
 ```
 native/build.sh                  # native/build/win/enginesim_native.dll, plus a Linux build for testing
 dotnet build -c Release          # EngineSim.dll; copies the plugin into the game's BepInEx/plugins/EngineSim
+dotnet build -c Release live     # EngineSimLive.dll (the electrics) into BepInEx/plugins/EngineSim/live
 ```
 
 The project expects to sit in the game folder (`Apocalypter/EngineSim`). Elsewhere, pass the game path:

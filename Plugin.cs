@@ -19,11 +19,12 @@ namespace EngineSim
     public enum SimQuality { High, Balanced, Fast }
 
     [BepInPlugin(GUID, NAME, VERSION)]
+    [BepInDependency("com.burner.apocalypter.sigmamod", BepInDependency.DependencyFlags.SoftDependency)]
     public class Plugin : BaseUnityPlugin
     {
         public const string GUID = "com.burner.apocalypter.enginesim";
         public const string NAME = "Engine Sim";
-        public const string VERSION = "1.7.0";
+        public const string VERSION = "1.8.0";
 
         public static ManualLogSource Log;
         public static ConfigEntry<bool> EnabledEntry;
@@ -43,7 +44,9 @@ namespace EngineSim
         public static ConfigEntry<bool> VerboseLogEntry;
         public static ConfigEntry<string> BaseIrEntry;
         public static ConfigEntry<bool> InductionEntry;
-        public static ConfigEntry<bool> SimDriveEntry, MatchGamePowerEntry, StarterGivesUpEntry;
+        public static ConfigEntry<bool> SimDriveEntry, MatchGamePowerEntry, StarterGivesUpEntry, ElectricsEntry;
+        // the experimental electrics: generator sets in the game's camps, lighting their lamps (read by the generator's script)
+        public static bool Electrics => ElectricsEntry != null && ElectricsEntry.Value;
         public static ConfigEntry<float> HardStartingEntry;
         public static ConfigEntry<float> TurboVolumeEntry, TurboPitchLowEntry, TurboPitchHighEntry, TurboFullSpoolEntry, TurboSpinDownEntry;
         public static ConfigEntry<float> SuperchargerVolumeEntry, SuperchargerPitchEntry;
@@ -117,6 +120,12 @@ namespace EngineSim
             DontDestroyOnLoad(_runner);
             _runner.AddComponent<EngineManager>();
             _runner.AddComponent<TuningKit>();
+            _runner.AddComponent<HandCranks>();
+            if (BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey("com.burner.apocalypter.sigmamod"))
+            {
+                try { HandCrankTags.Register(); }
+                catch (System.Exception e) { Log.LogWarning("hand crank: SigmaMod tags not registered: " + e.Message); }
+            }
             FsmDump.Init();
 
             Log.LogInfo(NAME + " " + VERSION + " loaded.");
@@ -126,6 +135,7 @@ namespace EngineSim
         {
             const string S = "Experimental";
             SimDriveEntry = Config.Bind(S, "⚠ Simulated drivetrain ⚠", false, "EXPERIMENTAL: the simulated engine powers the vehicle. Restarts engines.");
+            ElectricsEntry = Config.Bind(S, "Electrics", false, "EXPERIMENTAL: generator sets in camps power their electric lamps. Restart to apply.");
             MatchGamePowerEntry = Config.Bind(S, "Match game power", true, "Simulated drivetrain: scale torque to the game's rated power.");
             HardStartingEntry = Config.Bind(S, "Hard starting", 1f, new ConfigDescription("Simulated drivetrain: cold and worn engines need cranking. 0 = start instantly.", new AcceptableValueRange<float>(0f, 1f)));
             StarterGivesUpEntry = Config.Bind(S, "Starter gives up", true, "Simulated drivetrain: an overloaded starter only clicks.");

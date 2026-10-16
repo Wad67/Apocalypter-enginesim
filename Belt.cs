@@ -8,7 +8,8 @@ namespace EngineSim
     //   a, b                 the pulleys' centres (spinning visuals are fine: their origin stays on the axle)
     //   radiusA, radiusB     where the belt sits on each, m
     //   width, thickness     the belt's, m
-    //   coupling             the WheelCoupling the belt is (its engagement and its driving wheel's speed)
+    //   coupling             the WheelCoupling the belt is (its engagement and its driving wheel's speed), or
+    //   crankBelt            the belt drive it is (an IBeltDrive: a CrankBelt, a belt off an engine's crank pulley)
     //   sag                  how far the lower run hangs when the belt is fully slack, m
     //   material             optional; without one it is black rubber with moulded cross ribs (a cogged belt)
     //                        every `pitch` m, so its running and slipping can be seen
@@ -27,6 +28,7 @@ namespace EngineSim
         public float radiusA = 0.5f, radiusB = 0.1f;
         public float width = 0.05f, thickness = 0.008f;
         public WheelCoupling coupling;
+        public MonoBehaviour crankBelt; // or this: a belt off an engine's crank pulley (a is the crank pulley); an IBeltDrive
         public float sag = 0.06f;
         public Material material;
         public float pitch = 0.02f;
@@ -45,7 +47,14 @@ namespace EngineSim
         private float _lastSlack = -1f;
 
         // 0 tight .. 1 fully slack, in twentieths
-        private float Slack { get { return coupling == null ? 0f : Mathf.Round((1f - Mathf.Clamp01(coupling.engagement)) * 20f) / 20f; } }
+        private float Slack
+        {
+            get
+            {
+                float e = coupling != null ? coupling.engagement : crankBelt is IBeltDrive d ? d.Engagement : 1f;
+                return Mathf.Round((1f - Mathf.Clamp01(e)) * 20f) / 20f;
+            }
+        }
 
         private void Start()
         {
@@ -98,6 +107,8 @@ namespace EngineSim
             float speed = 0f;
             if (slack < 1f && coupling != null && coupling.a != null && coupling.a.wheel != null)
                 speed = coupling.a.wheel.angularVelocity * radiusA;
+            else if (slack < 1f && crankBelt is IBeltDrive drive)
+                speed = drive.DriveSpeed * radiusA;
             float tile = material != null ? width : Mathf.Max(pitch, 1e-3f);
             if (_length > 0f && tile > 0f)
             {
@@ -204,5 +215,13 @@ namespace EngineSim
             _mesh.SetTriangles(tris, 0);
             _mesh.RecalculateBounds();
         }
+    }
+
+    // A belt driven by something other than a WheelCoupling: its tension (0 slack .. 1 tight) and the driving
+    // pulley's speed, rad/s. Live code (a CrankBelt) implements it; Belt only sees this.
+    public interface IBeltDrive
+    {
+        float Engagement { get; }
+        float DriveSpeed { get; }
     }
 }

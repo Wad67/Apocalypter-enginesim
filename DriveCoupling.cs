@@ -38,7 +38,7 @@ namespace EngineSim
         private readonly EngineComponent.CalculateTorque _vanilla, _ours;
         private readonly bool _stalling, _autoStart;
         private readonly float _inertia, _slipTorque;
-        private readonly IgnitionSwitch _switch;
+        private readonly IKey _switch;
         private bool _inertiaSet, _partGone, _key, _cranking, _lastKey, _lastCranking, _lastFuel = true;
         private float _nextStats;
 
@@ -83,6 +83,7 @@ namespace EngineSim
 
         // whether a vehicle's key is on, coupled or not (for choosing which engines to simulate)
         private static readonly Dictionary<VehicleController, PlayMakerFSM> Switches = new Dictionary<VehicleController, PlayMakerFSM>();
+        private static readonly Dictionary<VehicleController, Component> Keys = new Dictionary<VehicleController, Component>();
 
         internal static bool KeyIsOn(VehicleController vc)
         {
@@ -91,7 +92,9 @@ namespace EngineSim
             if (Active.TryGetValue(engine, out coupling)) return coupling.KeyOn;
             PlayMakerFSM fsm;
             if (!Switches.TryGetValue(vc, out fsm)) Switches[vc] = fsm = IgnitionSwitch.FindFsm(vc);
-            return engine.ignition || IgnitionSwitch.IsOn(fsm);
+            if (fsm != null) return engine.ignition || IgnitionSwitch.IsOn(fsm);
+            if (!Keys.TryGetValue(vc, out var part)) Keys[vc] = part = PartKey.Find(vc);
+            return engine.ignition || PartKey.IsOn(part);
         }
 
         // the idle speed: the game's, and the idle screw's turn (Engine Tuning Toolkit)
@@ -112,7 +115,7 @@ namespace EngineSim
             // the key as the game left it: its switch on, or its engine on
             _key = KeyIsOn(vc);
             Active[_engine] = this;
-            _switch = IgnitionSwitch.TakeOver(vc, _key);
+            _switch = (IKey)IgnitionSwitch.TakeOver(vc, _key) ?? PartKey.TakeOver(vc);
             if (_engine.starterActive) _engine.starterActive = false;   // its fixed-time starter
             _engine.stallingEnabled = false;
             _engine.autoStartOnThrottle = false;
@@ -405,6 +408,7 @@ namespace EngineSim
         private static bool Prefix(EngineComponent __instance)
         {
             DriveCoupling coupling;
+            if (HandCranks.Coupled(__instance)) return false;   // a person has no start / stop
             return !DriveCoupling.Active.TryGetValue(__instance, out coupling) || coupling.PartGone;
         }
     }
@@ -415,6 +419,7 @@ namespace EngineSim
         private static bool Prefix(EngineComponent __instance)
         {
             DriveCoupling coupling;
+            if (HandCranks.Coupled(__instance)) return false;
             return !DriveCoupling.Active.TryGetValue(__instance, out coupling) || coupling.PartGone;
         }
     }
@@ -433,6 +438,7 @@ namespace EngineSim
         private static bool Prefix(EngineComponent __instance)
         {
             DriveCoupling coupling;
+            if (HandCranks.Coupled(__instance)) return false;
             if (DriveCoupling.Active.TryGetValue(__instance, out coupling) && !coupling.PartGone) return false;
             if (!Plugin.SimDriveEntry.Value) return true;
             var vc = __instance.vehicleController;
@@ -496,6 +502,8 @@ namespace EngineSim
             if (vc == null) return;
             DriveCoupling coupling;
             bool coupled = DriveCoupling.Active.TryGetValue(__instance, out coupling) && !coupling.PartGone;
+            // a hand crank turns the shaft on its own small inertia: it feels the clutch the same way
+            bool cranked = !coupled & HandCranks.Torque(__instance, out float crankTorque);
             var clutch = vc.powertrain.clutch;
             var gearbox = vc.powertrain.transmission;
             bool inGear = clutch != null && gearbox != null && ReferenceEquals(__instance.Output, clutch)
@@ -505,16 +513,18 @@ namespace EngineSim
             // loads on the crank (Shaft): the engine's torque is the simulation's, or, for an engine it doesn't
             // drive, the game's model's (its torque function's result this step, starter included; its power
             // reading is that torque times the speed, so it says nothing at a standstill)
-            float engineTorque = coupled ? coupling.LastTorque : GameTorque.Get(__instance);
+            float engineTorque = coupled ? coupling.LastTorque : cranked ? crankTorque : GameTorque.Get(__instance);
+            if (cranked) HandCranks.Stepped(__instance, inGear ? "in gear" : "free (not in gear)");
             if (Shaft.Step(vc, __state, engineTorque, inGear ? clutch.outputTorque : 0f, __instance.inertia, dt, out w))
             {
+                if (cranked) HandCranks.Stepped(__instance, "shaft loads, " + (inGear ? "in gear" : "not in gear"));
                 __instance.outputAngularVelocity = Mathf.Clamp(w, 0f, limit * 1.05f);
                 RpmPercent(__instance) = Mathf.Clamp01(__instance.outputAngularVelocity / limit);
                 return;
             }
-            if (!coupled || !inGear) return;
+            if (!(coupled || cranked) || !inGear) return;
             float inertia = Mathf.Max(1e-4f, __instance.inertia);
-            w = __state + (coupling.LastTorque - clutch.outputTorque) / inertia * dt;
+            w = __state + (engineTorque - clutch.outputTorque) / inertia * dt;
             __instance.outputAngularVelocity = Mathf.Clamp(w, 0f, limit * 1.05f);
             RpmPercent(__instance) = Mathf.Clamp01(__instance.outputAngularVelocity / limit);
         }

@@ -33,7 +33,7 @@ namespace EngineSim
         public float Wastegate, Relief, Pulley = 1f;
         public bool Vvt;   // turbo wastegate psi added; supercharger relief psi added, pulley drive ratio
 
-        public const float IgnitionRange = 10f, CamRange = 8f, IdleMin = -300f, IdleMax = 500f, LimiterMin = -1500f, LimiterMax = 1000f;
+        public const float IgnitionRange = 10f, CamRange = 8f, IdleMin = -300f, IdleMax = 500f, LimiterMin = -1500f, LimiterMax = 3000f;
         public const float MixtureMin = 0.75f, MixtureMax = 1.45f, SpringsMin = 0.6f, SpringsMax = 1.4f, LinkageMin = 0.5f, LinkageMax = 2f;
         public const float FilterMin = 0.8f, FilterMax = 1.3f, CutMax = 0.3f, PetrolAfr = 11.76f;
         public const float DurationRange = 30f, LiftMin = 0.8f, LiftMax = 1.25f;

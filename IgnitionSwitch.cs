@@ -14,7 +14,7 @@ namespace EngineSim
     // ignition and the starter loop), the hover text, and what it tells the rest of the vehicle when the
     // key turns (the dashboard's gauges: Activate / Deactivate). Released, the FSM is put back in the
     // state matching the key.
-    internal sealed class IgnitionSwitch
+    internal sealed class IgnitionSwitch : IKey
     {
         private const string FsmName = "Start";
         private const string StateOff = "off", StateOn = "off2", StateRunning = "off3", StateIgnition = "Ignition", StateStart = "Start";
@@ -210,5 +210,61 @@ namespace EngineSim
             var o = Field(action, name) as FsmObject;
             return o != null ? o.Value as AudioClip : null;
         }
+    }
+
+    // A key the simulated drivetrain works the engine by: the game's switch (its Start FSM, taken over), or a key part
+    // of the vehicle's own (a component with KeyOn and Cranking, which runs itself and stands back from the engine while
+    // its `external` is set).
+    internal interface IKey
+    {
+        bool On { get; }
+        bool Cranking { get; }
+        AudioSource Audio { get; }
+        AudioClip StarterClip { get; }
+        void Update();
+        void Release(bool turning);
+    }
+
+    internal sealed class PartKey : IKey
+    {
+        private readonly Component _part;
+        private readonly System.Reflection.PropertyInfo _on, _cranking, _audio;
+        private readonly System.Reflection.FieldInfo _external, _starter;
+
+        private PartKey(Component part)
+        {
+            _part = part;
+            var t = part.GetType();
+            _on = t.GetProperty("KeyOn"); _cranking = t.GetProperty("Cranking"); _audio = t.GetProperty("Audio");
+            _external = t.GetField("external"); _starter = t.GetField("StarterClip");
+            _external.SetValue(_part, true);
+        }
+
+        // a key part on the vehicle: anything with KeyOn and Cranking (bool properties) and an `external` field
+        public static Component Find(VehicleController vc)
+        {
+            foreach (var c in vc.GetComponentsInChildren<MonoBehaviour>(true))
+            {
+                if (c == null) continue;
+                var t = c.GetType();
+                if (t.GetProperty("KeyOn")?.PropertyType == typeof(bool) && t.GetProperty("Cranking")?.PropertyType == typeof(bool) && t.GetField("external")?.FieldType == typeof(bool)) return c;
+            }
+            return null;
+        }
+
+        public static bool IsOn(Component part) => part != null && part.GetType().GetProperty("KeyOn")?.GetValue(part, null) is bool b && b;
+
+        public static IKey TakeOver(VehicleController vc)
+        {
+            var part = Find(vc);
+            return part != null ? new PartKey(part) : null;
+        }
+
+        public bool On => _part != null && (bool)_on.GetValue(_part, null);
+        public bool Cranking => _part != null && (bool)_cranking.GetValue(_part, null);
+        public AudioSource Audio => _part != null ? _audio?.GetValue(_part, null) as AudioSource : null;
+        public AudioClip StarterClip => _part != null ? _starter?.GetValue(_part) as AudioClip : null;
+        public void Update() { }
+        public void Release(bool turning) { if (_part != null) _external.SetValue(_part, false); }
     }
 }
